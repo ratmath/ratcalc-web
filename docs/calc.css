@@ -879,3 +879,34 @@ header p {
         padding: 0.75rem;
     }
 }
+
+/* Phone layout with the keypad: the history takes the remaining height above
+   the input strip, and the keypad keeps its natural six rows. (Replaces the
+   earlier fixed 49dvh history and the invalid 40vdh keypad height.) */
+@media (max-width: 768px) {
+    body.keypad-visible .container {
+        display: flex;
+        flex-direction: column;
+        height: 100dvh;
+    }
+    body.keypad-visible .calculator {
+        flex: 1 1 auto;
+        min-height: 0;
+        height: auto;
+        display: flex;
+        flex-direction: column;
+    }
+    body.keypad-visible .output-history {
+        flex: 1 1 auto;
+        min-height: 0;
+        height: auto;
+        overflow-y: auto;
+    }
+    .mobile-keypad {
+        height: auto;
+        flex: 0 0 auto;
+    }
+    .keypad-btn {
+        min-height: 44px;
+    }
+}

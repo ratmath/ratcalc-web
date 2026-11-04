@@ -1,2 +1,3 @@
 export * from "@ratmath/core";
-export { Parser, R, F, parseRepeatingDecimal } from "@ratmath/parser";
+// R comes from Core; the legacy parser remains for the showcase and Stern-Brocot pages.
+export { Parser, F } from "@ratmath/parser";

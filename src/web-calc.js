@@ -1,2100 +1,331 @@
 /**
- * Web Calculator for ratmath
+ * RatCalc (web): a JavaScript REPL with RatMath Core exact arithmetic.
  *
- * Interactive web-based calculator that parses mathematical expressions using the ratmath library.
- * Supports rational arithmetic, intervals, and various output formats.
+ * The page is a thin view over the shared calculator session
+ * (apps/calc/src/session.js): input is JavaScript with Core and the R tag in
+ * scope, and Core results display exactly. calc.html adds a
+ * Content-Security-Policy that blocks network access and remote imports.
  */
+import { RationalInterval } from "@ratmath/core";
+import { createSession, HELP_TEXT } from "ratcalc/session";
+import { IntervalVisualization } from "./IntervalVisualization.js";
 
-import { Rational, RationalInterval, Integer, BaseSystem } from "@ratmath/core";
-import { Parser } from "@ratmath/parser";
-import { VariableManager, PackageRegistry, getPackageInfo, resolveDependencies } from "@ratmath/algebra";
-import { registerStdLib } from "@ratmath/stdlib";
-import { IntervalVisualization, OperationVisualization, MultiStepVisualization } from "./IntervalVisualization.js";
-
-// Package module loaders for web - dynamically import bundled packages
-const PackageLoaders = {
-    reals: () => import("@ratmath/reals/src/ratmath-module.js"),
-    "arith-funs": () => import("@ratmath/arith-funs/src/ratmath-module.js"),
-};
-
-class WebCalculator {
-  constructor() {
-    this.outputMode = "BOTH"; // 'DECI', 'RAT', 'BOTH', 'SCI', 'CF'
-    this.decimalLimit = 20; // Maximum decimal places before showing ...
-    this.mixedDisplay = true; // Whether to show fractions as mixed numbers by default
-    this.sciPrecision = 10; // Scientific notation precision (significant digits)
-    this.showPeriodInfo = false; // Whether to show period info in scientific notation
-    this.history = []; // Command history for up/down arrows
-    this.historyIndex = -1; // Current position in history
-    this.outputHistory = []; // All input/output pairs for copying
-    this.currentEntry = null; // Track current entry being built
-    this.mobileInput = ""; // Track mobile input separately
-    this.mobileKeypadSetup = false; // Track if mobile keypad is setup
-    this.variableManager = new VariableManager(); // Variable and function management
-    this.inputBase = BaseSystem.DECIMAL; // Base system for parsing input
-    this.outputBases = [BaseSystem.DECIMAL]; // Array of base systems for displaying output
-    this.customBases = new Map(); // Custom base definitions [n] = character_sequence
-    this.variableManager.setCustomBases(this.customBases);
-
-    // Register Standard Library
-    registerStdLib(this.variableManager);
-
-    this.currentVisualization = null; // Current visualization instance
-    this.lastResult = null; // Store last result for visualization
-
-    this.initializeElements();
-    this.setupEventListeners();
+export class WebCalculator {
+  constructor(root = document) {
+    this.root = root;
+    this.history = [];
+    this.historyIndex = -1;
+    this.transcript = [];
+    this.mobileInput = "";
+    this.visualization = null;
+    this.session = createSession({ onClear: () => this.clearOutput() });
+    this.elements();
+    this.listen();
     this.displayWelcome();
-    this.initializeElements();
-    this.setupEventListeners();
-    this.displayWelcome();
-
-    // Auto-load modules from URL query string ?load=url1,url2
-    this.loadModulesFromUrl();
   }
 
-  initializeElements() {
-    this.inputElement = document.getElementById("calculatorInput");
-    this.outputHistoryElement = document.getElementById("outputHistory");
-    this.helpModal = document.getElementById("helpModal");
-    this.copyButton = document.getElementById("copyButton");
-    this.helpButton = document.getElementById("helpButton");
-    this.clearButton = document.getElementById("clearButton");
-    this.closeHelp = document.getElementById("closeHelp");
-    this.mobileKeypad = document.getElementById("mobileKeypad");
-    this.commandPanel = document.getElementById("commandPanel");
-    this.closeCommandPanel = document.getElementById("closeCommandPanel");
-
-    // Visualization elements
-    this.visualizationModal = document.getElementById("visualizationModal");
-    this.visualizationContainer = document.getElementById("visualizationContainer");
-    this.closeVisualization = document.getElementById("closeVisualization");
-    this.exportSVGBtn = document.getElementById("exportSVGBtn");
-    this.exportHTMLBtn = document.getElementById("exportHTMLBtn");
-    this.saveComputationBtn = document.getElementById("saveComputationBtn");
-    this.stepSizeInput = document.getElementById("stepSizeInput");
+  $(id) {
+    return this.root.getElementById(id);
   }
 
-  setupEventListeners() {
-    // Input handling
-    this.inputElement.addEventListener("keydown", (e) => this.handleKeyDown(e));
+  elements() {
+    this.input = this.$("calculatorInput");
+    this.output = this.$("outputHistory");
+    this.helpModal = this.$("helpModal");
+    this.keypad = this.$("mobileKeypad");
+    this.mobileDisplay = this.$("mobileInputDisplay");
+    this.commandPanel = this.$("commandPanel");
+    this.copyButton = this.$("copyButton");
+    this.visualizationModal = this.$("visualizationModal");
+    this.visualizationContainer = this.$("visualizationContainer");
+    this.stepSizeInput = this.$("stepSizeInput");
+    this.saveButton = this.$("saveComputationBtn");
+  }
 
-    // Button handlers
+  listen() {
+    this.input.addEventListener("keydown", (event) => this.handleKeyDown(event));
     this.copyButton.addEventListener("click", () => this.copySession());
-    this.helpButton.addEventListener("click", () => this.showHelp());
-    this.clearButton.addEventListener("click", () => this.clearHistory());
-
-    // Modal handlers
-    this.closeHelp.addEventListener("click", () => this.hideHelp());
-    this.helpModal.addEventListener("click", (e) => {
-      if (e.target === this.helpModal) {
-        this.hideHelp();
-      }
-    });
-
-    // Visualization modal handlers
-    this.closeVisualization.addEventListener("click", () => this.hideVisualization());
-    this.visualizationModal.addEventListener("click", (e) => {
-      if (e.target === this.visualizationModal) {
+    this.$("helpButton").addEventListener("click", () => this.showHelp());
+    this.$("clearButton").addEventListener("click", () => this.run("clear()"));
+    this.$("closeHelp").addEventListener("click", () => this.hideModal(this.helpModal));
+    this.$("closeVisualization").addEventListener("click", () => this.hideVisualization());
+    this.$("exportSVGBtn").addEventListener("click", () => this.download("interval.svg", "image/svg+xml", this.visualization?.exportSVG()));
+    this.$("exportHTMLBtn").addEventListener("click", () => this.download("interval.html", "text/html", this.visualization?.exportHTML?.()));
+    this.saveButton.addEventListener("click", () => this.saveVisualization());
+    this.stepSizeInput.addEventListener("input", () => this.updateStepSize());
+    for (const modal of [this.helpModal, this.visualizationModal]) {
+      modal.addEventListener("click", (event) => { if (event.target === modal) this.hideModal(modal); });
+    }
+    this.root.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        this.hideModal(this.helpModal);
         this.hideVisualization();
       }
     });
-
-
-    // Visualization control handlers
-    this.exportSVGBtn.addEventListener("click", () => this.exportVisualizationSVG());
-    this.exportHTMLBtn.addEventListener("click", () => this.exportVisualizationHTML());
-    this.saveComputationBtn.addEventListener("click", () => this.saveVisualizationToCalculator());
-    this.stepSizeInput.addEventListener("input", () => this.updateVisualizationStepSize());
-    this.stepSizeInput.addEventListener("keydown", (e) => this.handleStepSizeKeydown(e));
-
-    // Keyboard shortcuts
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
-        this.hideHelp();
-        this.hideVisualization();
-      } else if (this.visualizationModal.style.display === "block") {
-        // Handle arrow keys when visualization modal is open
-        this.handleVisualizationKeydown(e);
-      }
-    });
-
-    // Auto-focus input on page load (but not on mobile to avoid virtual keyboard)
-    if (!this.isMobile()) {
-      setTimeout(() => this.inputElement.focus(), 100);
-    }
-
-    // Add mobile-specific input handling
-    if (this.isMobile()) {
-      this.inputElement.setAttribute("inputmode", "none");
-      this.inputElement.setAttribute("autocomplete", "off");
-      this.inputElement.setAttribute("autocorrect", "off");
-      this.inputElement.setAttribute("autocapitalize", "off");
-      this.inputElement.setAttribute("spellcheck", "false");
-      this.setupMobileKeypad();
-    }
+    this.setupKeypad();
+    if (!this.isMobile()) setTimeout(() => this.input.focus(), 100);
   }
 
   isMobile() {
-    return window.innerWidth <= 768;
+    return typeof window !== "undefined" && window.innerWidth <= 768;
   }
 
-  handleKeyDown(e) {
-    switch (e.key) {
-      case "Enter":
-        this.processInput();
-        break;
-      case "ArrowUp":
-        e.preventDefault();
-        this.navigateHistory(-1);
-        break;
-      case "ArrowDown":
-        e.preventDefault();
-        this.navigateHistory(1);
-        break;
+  handleKeyDown(event) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      this.submit();
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      this.navigateHistory(-1);
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      this.navigateHistory(1);
     }
   }
 
   navigateHistory(direction) {
     if (this.history.length === 0) return;
-
-    if (direction === -1) {
-      // Up arrow
-      if (this.historyIndex === -1) {
-        this.historyIndex = this.history.length - 1;
-      } else if (this.historyIndex > 0) {
-        this.historyIndex--;
-      }
-    } else {
-      // Down arrow
-      if (this.historyIndex === -1) return;
-      if (this.historyIndex < this.history.length - 1) {
-        this.historyIndex++;
-      } else {
-        this.historyIndex = -1;
-        this.inputElement.value = "";
-        return;
-      }
-    }
-
-    this.inputElement.value = this.history[this.historyIndex];
-    // Move cursor to end
-    setTimeout(() => {
-      this.inputElement.setSelectionRange(
-        this.inputElement.value.length,
-        this.inputElement.value.length,
-      );
-    }, 0);
+    if (direction < 0) this.historyIndex = this.historyIndex === -1 ? this.history.length - 1 : Math.max(0, this.historyIndex - 1);
+    else if (this.historyIndex === -1) return;
+    else if (this.historyIndex < this.history.length - 1) this.historyIndex += 1;
+    else { this.historyIndex = -1; this.setInput(""); return; }
+    this.setInput(this.history[this.historyIndex]);
   }
 
-  processInput() {
-    // On mobile, use the mobileInput instead of input element
+  currentInput() {
+    return this.isMobile() ? this.mobileInput : this.input.value;
+  }
+
+  setInput(text) {
     if (this.isMobile()) {
-      const mobileInputValue = this.mobileInput.trim();
-      if (!mobileInputValue) return;
-      this.processExpression(mobileInputValue);
-      this.mobileInput = "";
+      this.mobileInput = text;
       this.updateMobileDisplay();
-      return;
+    } else {
+      this.input.value = text;
+      this.input.focus();
+      this.input.setSelectionRange(text.length, text.length);
     }
-
-    // Desktop behavior
-    const input = this.inputElement.value.trim();
-    if (!input) {
-      this.inputElement.focus();
-      return;
-    }
-    this.processExpression(input);
   }
 
-  processExpression(input) {
-    // Add to history
-    if (
-      this.history.length === 0 ||
-      this.history[this.history.length - 1] !== input
-    ) {
-      this.history.push(input);
-    }
+  submit() {
+    const source = this.currentInput().trim();
+    if (!source) return;
+    this.setInput("");
+    this.run(source);
+  }
+
+  /** Evaluate one input and append it with its result. */
+  run(source) {
+    this.history.push(source);
     this.historyIndex = -1;
-
-    // Start tracking this entry for copying
-    this.currentEntry = { input: input, output: "", isError: false };
-
-    // Display input
-    this.addToOutput(input, null, false);
-
-    // Check for base definition syntax: [n] = range
-    const baseDefMatch = input.match(/^\[(\d+)\]\s*=\s*(.+)$/);
-    if (baseDefMatch) {
-      const baseNum = parseInt(baseDefMatch[1]);
-      const range = baseDefMatch[2].trim();
-
-      try {
-        if (isNaN(baseNum) || baseNum < 2) {
-          throw new Error("Base number must be an integer >= 2");
-        }
-
-        // Create validation BaseSystem to check the range
-        const newBase = new BaseSystem(range, `Custom Base ${baseNum}`);
-
-        if (newBase.base !== baseNum) {
-          throw new Error(
-            `Character sequence length (${newBase.base}) does not match declared base [${baseNum}]`,
-          );
-        }
-
-        this.customBases.set(baseNum, newBase);
-        const output = `Defined custom base [${baseNum}] with characters "${range}"`;
-        this.addToOutput("", output, false);
-        this.finishEntry(output);
-      } catch (error) {
-        const output = `Error defining base: ${error.message}`;
-        this.addToOutput("", output, true);
-        this.currentEntry.isError = true;
-        this.finishEntry(output);
-      }
-      this.inputElement.value = "";
-      return;
-    }
-
-    // Handle special commands
-    const upperInput = input.toUpperCase();
-
-    if (upperInput === "HELP") {
-      this.showHelp();
-      this.inputElement.value = "";
-      this.currentEntry = null; // Don't track help command
-      return;
-    }
-
-    if (upperInput.startsWith("HELP ")) {
-      const topic = input.substring(5).trim();
-      const helpText = this.variableManager.getHelp(topic);
-      this.addToOutput(input, helpText, false);
-      this.finishEntry(helpText);
-      this.inputElement.value = "";
-      return;
-    }
-
-    if (upperInput.startsWith("LOAD ")) {
-      const url = input.substring(5).trim();
-      this.addToOutput(input, `Loading module from ${url}...`, false);
-      this.handleLoadCommand(url).then(msg => {
-        this.addToOutput("", msg, false);
-        this.finishEntry(msg);
-      }).catch(err => {
-        this.addToOutput("", `Error loading module: ${err.message}`, true);
-        this.finishEntry(`Error: ${err.message}`);
-      });
-      this.inputElement.value = "";
-      return;
-    }
-
-    if (upperInput === "CLEAR") {
-      this.clearHistory();
-      this.inputElement.value = "";
-      this.currentEntry = null; // Don't track clear command
-      return;
-    }
-
-    if (upperInput === "VARS") {
-      this.showVariables();
-      this.inputElement.value = "";
-      this.currentEntry = null; // Don't track vars command
-      return;
-    }
-
-    if (upperInput === "DECI") {
-      this.outputMode = "DECI";
-      const output = "Output mode set to decimal";
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-
-    if (upperInput === "RAT") {
-      this.outputMode = "RAT";
-      const output = "Output mode set to rational";
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-
-    if (upperInput === "BOTH") {
-      this.outputMode = "BOTH";
-      const output = "Output mode set to both decimal and rational";
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-
-    if (upperInput === "SCI") {
-      this.outputMode = "SCI";
-      const output = "Output mode set to scientific notation";
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-
-    if (upperInput === "CF") {
-      this.outputMode = "CF";
-      const output = "Output mode set to continued fraction";
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-
-    if (upperInput === "MIX") {
-      this.mixedDisplay = !this.mixedDisplay;
-      const output = `Mixed number display ${this.mixedDisplay ? "enabled" : "disabled"}`;
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-
-    if (upperInput.startsWith("LIMIT")) {
-      const limitStr = upperInput.substring(5).trim();
-      let output;
-      if (limitStr === "") {
-        output = `Current decimal display limit: ${this.decimalLimit} digits`;
-        this.addToOutput("", output, false);
-      } else {
-        const limit = parseInt(limitStr);
-        if (isNaN(limit) || limit < 1) {
-          output = "Error: LIMIT must be a positive integer";
-          this.addToOutput("", output, true);
-          this.currentEntry.isError = true;
-        } else {
-          this.decimalLimit = limit;
-          output = `Decimal display limit set to ${limit} digits`;
-          this.addToOutput("", output, false);
-        }
-      }
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-
-    if (upperInput.startsWith("SCIPREC")) {
-      const precStr = upperInput.substring(7).trim();
-      let output;
-      if (precStr === "") {
-        output = `Current scientific notation precision: ${this.sciPrecision} digits`;
-        this.addToOutput("", output, false);
-      } else {
-        const precision = parseInt(precStr);
-        if (isNaN(precision) || precision < 1) {
-          output = "Error: SCIPREC must be a positive integer";
-          this.addToOutput("", output, true);
-          this.currentEntry.isError = true;
-        } else {
-          this.sciPrecision = precision;
-          output = `Scientific notation precision set to ${precision} digits`;
-          this.addToOutput("", output, false);
-        }
-      }
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-
-    if (upperInput === "SCIPERIOD") {
-      this.showPeriodInfo = !this.showPeriodInfo;
-      const output = `Period info in scientific notation ${this.showPeriodInfo ? "enabled" : "disabled"}`;
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-
-    // Handle BASE commands (but not BASES)
-    if (upperInput.startsWith("BASE") && !upperInput.startsWith("BASES")) {
-      this.handleBaseCommand(input);
-      this.inputElement.value = "";
-      return;
-    }
-
-    // Handle BIN, HEX, OCT shortcuts
-    if (upperInput === "BIN") {
-      this.inputBase = BaseSystem.BINARY;
-      this.outputBases = [BaseSystem.BINARY];
-      this.variableManager.setInputBase(BaseSystem.BINARY);
-      const output = "Base set to binary (base 2)";
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-
-    if (upperInput === "HEX") {
-      this.inputBase = BaseSystem.HEXADECIMAL;
-      this.outputBases = [BaseSystem.HEXADECIMAL];
-      this.variableManager.setInputBase(BaseSystem.HEXADECIMAL);
-      const output = "Base set to hexadecimal (base 16)";
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-
-    if (upperInput === "OCT") {
-      this.inputBase = BaseSystem.OCTAL;
-      this.outputBases = [BaseSystem.OCTAL];
-      this.variableManager.setInputBase(BaseSystem.OCTAL);
-      const output = "Base set to octal (base 8)";
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-
-    if (upperInput === "DEC") {
-      this.inputBase = BaseSystem.DECIMAL;
-      this.outputBases = [BaseSystem.DECIMAL];
-      this.variableManager.setInputBase(BaseSystem.DECIMAL);
-      const output = "Base set to decimal (base 10)";
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-
-    if (upperInput.startsWith("BASES")) {
-      const args = input.trim().substring(5).trim();
-      if (args) {
-        this.handleBasesCommand(args);
-      } else {
-        this.showBases();
-      }
-      this.inputElement.value = "";
-      return;
-    }
-
-    // Try to process with variable manager first
-    const varResult = this.variableManager.processInput(input);
-
-    if (varResult.type === "error") {
-      this.addToOutput("", varResult.message, true);
-      this.currentEntry.isError = true;
-      this.finishEntry(varResult.message);
-    } else if (
-      varResult.type === "assignment" ||
-      varResult.type === "function"
-    ) {
-      const output = varResult.message;
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-    } else {
-      // Regular expression evaluation
-      try {
-        this.lastResult = varResult.result; // Store for visualization
-        this.lastExpression = input; // Store the expression for visualization
-        const output = this.formatResult(varResult.result);
-        this.addToOutput("", output, false, varResult.result, input);
-        this.finishEntry(output);
-      } catch (error) {
-        let errorMessage;
-        if (
-          error.message.includes("Division by zero") ||
-          error.message.includes("Denominator cannot be zero")
-        ) {
-          errorMessage = "Error: Division by zero is undefined";
-        } else if (
-          error.message.includes("Factorial") &&
-          error.message.includes("negative")
-        ) {
-          errorMessage = "Error: Factorial is not defined for negative numbers";
-        } else if (
-          error.message.includes("Zero cannot be raised to the power of zero")
-        ) {
-          errorMessage = "Error: 0^0 is undefined";
-        } else {
-          errorMessage = `Error: ${error.message}`;
-        }
-        this.addToOutput("", errorMessage, true);
-        this.currentEntry.isError = true;
-        this.finishEntry(errorMessage);
-      }
-    }
-
-    this.inputElement.value = "";
-
-    // Ensure input stays focused (except on mobile)
-    if (!this.isMobile()) {
-      setTimeout(() => this.inputElement.focus(), 50);
-    }
+    const command = source.trim().toLowerCase();
+    const result = command === "help" || command === ".help"
+      ? { ok: true, text: HELP_TEXT, value: undefined }
+      : this.session.evaluate(source);
+    this.addEntry(source, result);
+    return result;
   }
 
-  finishEntry(output) {
-    if (this.currentEntry) {
-      this.currentEntry.output = output;
-      this.outputHistory.push(this.currentEntry);
-      this.currentEntry = null;
-    }
-  }
-
-  formatResult(result) {
-    if (result && result.type === "string") {
-      // Return string value directly - newlines will be preserved in display
-      return result.value;
-    } else if (result && result.type === "sequence") {
-      return this.variableManager.formatValue(result);
-    } else if (result instanceof RationalInterval) {
-      return this.formatInterval(result);
-    } else if (result instanceof Rational) {
-      return this.formatRational(result);
-    } else if (result instanceof Integer) {
-      return this.formatInteger(result);
-    } else {
-      return result.toString();
-    }
-  }
-
-  formatInteger(integer) {
-    const decimal = integer.value.toString();
-    const rat = new Rational(integer.value, 1n);
-    const baseRepresentation = this.formatRationalBaseRepresentations(rat);
-    return `${decimal}${baseRepresentation}`;
-  }
-
-  formatRational(rational) {
-    const repeatingInfo = rational.toRepeatingDecimalWithPeriod();
-    const repeatingDecimal = repeatingInfo.decimal;
-    const period = repeatingInfo.period;
-    const decimal = this.formatDecimal(rational);
-    const fraction = this.mixedDisplay
-      ? rational.toMixedString()
-      : rational.toString();
-
-    // Format the decimal representation, respecting truncation limits
-    const displayDecimal = this.formatRepeatingExpansion(repeatingDecimal);
-
-    // Add period information for true repeating decimals (period > 0)
-    const periodInfo =
-      period === -1
-        ? " [period > 10^7]"
-        : period > 0
-          ? ` {period: ${period}}`
-          : "";
-
-    // Show base representations if not all decimal
-    const baseRepresentation = this.formatRationalBaseRepresentations(rational);
-
-    switch (this.outputMode) {
-      case "DECI":
-        return `${displayDecimal}${periodInfo}${baseRepresentation}`;
-      case "RAT":
-        return `${fraction}${baseRepresentation}`;
-      case "SCI":
-        const scientificNotation = rational.toScientificNotation(
-          true,
-          this.sciPrecision,
-          this.showPeriodInfo,
-        );
-        return `${scientificNotation} (${fraction})${baseRepresentation}`;
-      case "CF":
-        const continuedFraction = rational.toContinuedFractionString();
-        return `${continuedFraction} (${fraction})${baseRepresentation}`;
-      case "BOTH":
-        if (fraction.includes("/") || fraction.includes("..")) {
-          return `${displayDecimal}${periodInfo} (${fraction})${baseRepresentation}`;
-        } else {
-          return `${decimal}${baseRepresentation}`;
-        }
-      default:
-        return `${displayDecimal}${periodInfo} (${fraction})${baseRepresentation}`;
-    }
-  }
-
-  formatRationalBaseRepresentations(rational) {
-    if (!this.outputBases.some((base) => base.base !== 10)) return "";
-
-    const baseReprs = [];
-    for (const base of this.outputBases) {
-      if (base.base !== 10) {
-        try {
-          const { baseStr, period: basePeriod } =
-            rational.toRepeatingBaseWithPeriod(base);
-          const formattedBaseStr = this.formatRepeatingExpansion(baseStr);
-          const basePeriodInfo =
-            basePeriod === -1
-              ? " [period > 10^6]"
-              : basePeriod > 0
-                ? ` {period: ${basePeriod}}`
-                : "";
-
-          const prefix = BaseSystem.getPrefixForSystem(base);
-          const formattedOutput = prefix
-            ? `0${prefix}${formattedBaseStr}`
-            : `${formattedBaseStr}[${base.base}]`;
-
-          baseReprs.push(`${formattedOutput}${basePeriodInfo}`);
-        } catch (error) {
-          // Ignore conversion errors for individual bases
-        }
-      }
-    }
-
-    if (baseReprs.length > 0) {
-      return ` (${baseReprs.join(", ")})`;
-    }
-    return "";
-  }
-
-  formatIntervalBaseRepresentations(interval) {
-    if (!this.outputBases.some((base) => base.base !== 10)) return "";
-
-    const baseReprs = [];
-    for (const base of this.outputBases) {
-      if (base.base !== 10) {
-        try {
-          const { baseStr: lowStr } =
-            interval.low.toRepeatingBaseWithPeriod(base);
-          const { baseStr: highStr } =
-            interval.high.toRepeatingBaseWithPeriod(base);
-
-          const lowFormatted = this.formatRepeatingExpansion(lowStr);
-          const highFormatted = this.formatRepeatingExpansion(highStr);
-
-          const prefix = BaseSystem.getPrefixForSystem(base);
-          const lowOutput = prefix
-            ? `0${prefix}${lowFormatted}`
-            : `${lowFormatted}[${base.base}]`;
-          const highOutput = prefix
-            ? `0${prefix}${highFormatted}`
-            : `${highFormatted}[${base.base}]`;
-
-          baseReprs.push(`${lowOutput}:${highOutput}`);
-        } catch (error) {
-          // Ignore conversion errors
-        }
-      }
-    }
-
-    if (baseReprs.length > 0) {
-      return ` (${baseReprs.join(", ")})`;
-    }
-    return "";
-  }
-
-  formatDecimal(rational) {
-    const decimal = rational.toDecimal();
-    if (decimal.length > this.decimalLimit + 2) {
-      const dotIndex = decimal.indexOf(".");
-      if (
-        dotIndex !== -1 &&
-        decimal.length - dotIndex - 1 > this.decimalLimit
-      ) {
-        return decimal.substring(0, dotIndex + this.decimalLimit + 1) + "...";
-      }
-    }
-    return decimal;
-  }
-
-  formatRepeatingExpansion(expansion) {
-    // If no repeating part (#), return as is or truncate if too long
-    if (!expansion.includes("#")) {
-      if (expansion.length > this.decimalLimit + 2) {
-        const dotIndex = expansion.indexOf(".");
-        if (
-          dotIndex !== -1 &&
-          expansion.length - dotIndex - 1 > this.decimalLimit
-        ) {
-          return expansion.substring(0, dotIndex + this.decimalLimit + 1) + "...";
-        }
-      }
-      return expansion;
-    }
-
-    // Check if it's a terminating decimal (ends with #0)
-    if (expansion.endsWith("#0")) {
-      const withoutRepeating = expansion.substring(0, expansion.length - 2);
-      // If the terminating part exceeds limit, truncate it
-      if (withoutRepeating.length > this.decimalLimit + 2) {
-        const dotIndex = withoutRepeating.indexOf(".");
-        if (
-          dotIndex !== -1 &&
-          withoutRepeating.length - dotIndex - 1 > this.decimalLimit
-        ) {
-          return (
-            withoutRepeating.substring(0, dotIndex + this.decimalLimit + 1) +
-            "..."
-          );
-        }
-      }
-      return withoutRepeating;
-    }
-
-    // Check if the total length exceeds limit
-    if (expansion.length > this.decimalLimit + 2) {
-      // +2 for potential "0."
-      const hashIndex = expansion.indexOf("#");
-      const beforeHash = expansion.substring(0, hashIndex);
-      const afterHash = expansion.substring(hashIndex + 1);
-
-      // If the non-repeating part alone exceeds limit, truncate it
-      if (beforeHash.length > this.decimalLimit + 1) {
-        return beforeHash.substring(0, this.decimalLimit + 1) + "...";
-      }
-
-      // If adding some of the repeating part would exceed limit, truncate
-      const remainingSpace = this.decimalLimit + 2 - beforeHash.length;
-      if (remainingSpace <= 1) {
-        return beforeHash + "#...";
-      } else if (afterHash.length > remainingSpace - 1) {
-        return (
-          beforeHash + "#" + afterHash.substring(0, remainingSpace - 1) + "..."
-        );
-      }
-    }
-
-    return expansion;
-  }
-
-  formatInterval(interval) {
-    const lowRepeatingInfo = interval.low.toRepeatingDecimalWithPeriod();
-    const highRepeatingInfo = interval.high.toRepeatingDecimalWithPeriod();
-    const lowRepeating = lowRepeatingInfo.decimal;
-    const highRepeating = highRepeatingInfo.decimal;
-    const lowPeriod = lowRepeatingInfo.period;
-    const highPeriod = highRepeatingInfo.period;
-    const lowFraction = interval.low.toString();
-    const highFraction = interval.high.toString();
-
-    const lowDisplay = this.formatRepeatingExpansion(lowRepeating);
-    const highDisplay = this.formatRepeatingExpansion(highRepeating);
-
-    let periodInfo = "";
-    if (lowPeriod > 0 || highPeriod > 0) {
-      const periodParts = [];
-      if (lowPeriod > 0) periodParts.push(`low: ${lowPeriod}`);
-      if (highPeriod > 0) periodParts.push(`high: ${highPeriod}`);
-      periodInfo = ` {period: ${periodParts.join(", ")}}`;
-    }
-
-    const baseRepresentation = this.formatIntervalBaseRepresentations(interval);
-
-    switch (this.outputMode) {
-      case "DECI":
-        return `${lowDisplay}:${highDisplay}${periodInfo}${baseRepresentation}`;
-      case "RAT":
-        return `${lowFraction}:${highFraction}${baseRepresentation}`;
-      case "BOTH":
-        const decimalRange = `${lowDisplay}:${highDisplay}${periodInfo}`;
-        const rationalRange = `${lowFraction}:${highFraction}`;
-        if (decimalRange !== rationalRange) {
-          return `${decimalRange} (${rationalRange})${baseRepresentation}`;
-        } else {
-          return `${decimalRange}${baseRepresentation}`;
-        }
-      default:
-        return `${lowFraction}:${highFraction}${baseRepresentation}`;
-    }
-  }
-
-  loadModulesFromUrl() {
-    if (typeof window === 'undefined') return;
-
-    const params = new URLSearchParams(window.location.search);
-    const loadParam = params.get('load');
-    if (loadParam) {
-      const urls = loadParam.split(',');
-      for (const url of urls) {
-        if (url.trim()) {
-          this.handleLoadCommand(url.trim())
-            .then(msg => this.addToOutput("", msg, false))
-            .catch(e => this.addToOutput("", `Auto-load error: ${e.message}`, true));
-        }
-      }
-    }
-  }
-
-  async handleLoadCommand(moduleInput) {
-    // Split input to support multiple packages: LOAD reals units
-    const parts = moduleInput.trim().split(/\s+/);
-    const results = [];
-    
-    // Collect packages to load from registry vs file URLs
-    const registryPackages = [];
-    const fileModules = [];
-    
-    for (const part of parts) {
-      // Check if it's a registered package name
-      const pkgInfo = getPackageInfo(part);
-      if (pkgInfo) {
-        registryPackages.push(part.toLowerCase());
-      } else {
-        // Treat as URL/file to fetch
-        fileModules.push(part);
-      }
-    }
-    
-    // Resolve dependencies for registry packages
-    if (registryPackages.length > 0) {
-      const toLoad = resolveDependencies(registryPackages, this.variableManager.getLoadedPackages());
-      
-      for (const pkgName of toLoad) {
-        const result = await this.loadRegistryPackage(pkgName);
-        if (result) results.push(result);
-      }
-    }
-    
-    // Load file-based modules (URLs)
-    for (const fileModule of fileModules) {
-      const result = await this.loadFileModule(fileModule);
-      if (result) results.push(result);
-    }
-    
-    return results.join('\n') || 'No packages loaded.';
-  }
-  
-  async loadRegistryPackage(packageName) {
-    const pkgInfo = getPackageInfo(packageName);
-    if (!pkgInfo) {
-      return `Package '${packageName}' not found in registry.`;
-    }
-    
-    if (this.variableManager.isPackageLoaded(packageName)) {
-      return `Package '${pkgInfo.name}' is already loaded.`;
-    }
-    
-    // Check if we have a loader for this package
-    if (PackageLoaders[packageName]) {
-      try {
-        const mod = await PackageLoaders[packageName]();
-        const scope = mod.default || mod;
-        const result = this.variableManager.loadModule(pkgInfo.name, scope);
-        this.variableManager.markPackageLoaded(packageName);
-        return result;
-      } catch (e) {
-        return `Error loading package '${pkgInfo.name}': ${e.message}`;
-      }
-    } else {
-      return `Package '${pkgInfo.name}' is not yet implemented.`;
-    }
-  }
-  
-  async loadFileModule(inputUrl) {
-    try {
-      let url = inputUrl;
-      let moduleName = "";
-
-      if (inputUrl.startsWith("@@")) {
-        const name = inputUrl.substring(2).replace(/@$/, "");
-        moduleName = name;
-        url = `${name}.rat`;
-      } else {
-        const basename = url.split(/[/\\]/).pop().split(/[?#]/)[0].split('.')[0];
-        moduleName = basename.charAt(0).toUpperCase() + basename.slice(1);
-      }
-
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch ${url} (Status ${response.status})`);
-      }
-
-      const content = await response.text();
-
-      if (url.endsWith(".js")) {
-        try {
-          const mod = await import(url);
-          const scope = mod.default || mod;
-          if (!scope.functions && !scope.variables) {
-            return `Warning: JS Module '${moduleName}' does not seem to export 'functions' or 'variables'.`;
-          }
-          return this.variableManager.loadModule(moduleName, scope);
-        } catch (e) {
-          throw new Error(`JS Import failed: ${e.message}. Note: WebCalc supports .rat scripts best.`);
-        }
-      } else {
-        // Rat Script
-        const tempVM = new VariableManager();
-        tempVM.setCustomBases(this.customBases);
-        tempVM.setInputBase(this.inputBase);
-
-        const lines = content.split('\n');
-        for (const line of lines) {
-          if (!line.trim() || line.trim().startsWith("#") || line.trim().startsWith("//")) continue;
-          try {
-            tempVM.processInput(line);
-          } catch (e) { }
-        }
-
-        const modScope = {
-          functions: Object.fromEntries(tempVM.getFunctions()),
-          variables: Object.fromEntries(tempVM.getVariables())
-        };
-        return this.variableManager.loadModule(moduleName, modScope);
-      }
-    } catch (error) {
-      throw error;
-    }
-  }
-
-  addToOutput(input = null, output = null, isError = false, result = null, expression = null) {
+  addEntry(source, result) {
+    if (source === "clear()" && result.ok) return;
     const entry = document.createElement("div");
     entry.className = "output-entry";
+    const inputLine = document.createElement("div");
+    inputLine.className = "input-line";
+    inputLine.innerHTML = '<span class="prompt">></span><span class="input-text"></span><span class="reload-icon" title="Reload expression">↻</span>';
+    inputLine.querySelector(".input-text").textContent = source;
+    inputLine.addEventListener("click", () => this.setInput(source));
+    entry.appendChild(inputLine);
 
-    if (input) {
-      const inputLine = document.createElement("div");
-      inputLine.className = "input-line";
-      inputLine.innerHTML = `<span class="prompt">></span><span>${this.escapeHtml(input)}</span><span class="reload-icon" title="Reload expression">↻</span>`;
-
-      // Add click handler for reload
-      inputLine.addEventListener("click", (e) => {
-        if (
-          e.target.classList.contains("reload-icon") ||
-          e.currentTarget === inputLine
-        ) {
-          e.stopPropagation();
-          this.reloadExpression(input);
-        }
+    const outputLine = document.createElement("div");
+    outputLine.className = result.ok ? "output-line" : "error-line";
+    outputLine.textContent = result.text;
+    if (result.ok && result.value !== undefined) {
+      const inject = document.createElement("span");
+      inject.className = "inject-icon";
+      inject.title = "Use the value (ans)";
+      inject.textContent = "→";
+      outputLine.appendChild(inject);
+      outputLine.addEventListener("click", (event) => {
+        if (event.target.classList.contains("viz-icon")) return;
+        this.insertAtCursor(this.injection(result.value));
       });
-
-      entry.appendChild(inputLine);
-    }
-
-    if (output) {
-      const outputLine = document.createElement("div");
-      outputLine.className = isError ? "error-line" : "output-line";
-
-      if (!isError) {
-        let icons = `<span class="inject-icon" title="Inject value">→</span>`;
-
-        // Add visualization icon for intervals
-        if (result && (result instanceof RationalInterval || result.constructor.name === 'RationalInterval')) {
-          icons += `<span class="viz-icon" title="Visualize interval">📊</span>`;
-        }
-
-        outputLine.innerHTML = `${this.escapeHtml(output)}${icons}`;
-
-        // Store expression with this output for visualization
-        if (expression) {
-          outputLine.dataset.expression = expression;
-        }
-
-        // Add click handler for inject
-        outputLine.addEventListener("click", (e) => {
-          if (e.target.classList.contains("inject-icon")) {
-            e.stopPropagation();
-            const value = this.extractValue(output);
-            this.injectValue(value);
-          } else if (e.target.classList.contains("viz-icon")) {
-            e.stopPropagation();
-            const storedExpression = outputLine.dataset.expression || "";
-            this.showVisualization(result, storedExpression);
-          } else if (e.currentTarget === outputLine && !e.target.classList.contains("viz-icon")) {
-            e.stopPropagation();
-            const value = this.extractValue(output);
-            this.injectValue(value);
-          }
+      if (result.value instanceof RationalInterval) {
+        const viz = document.createElement("span");
+        viz.className = "viz-icon";
+        viz.title = "Visualize interval";
+        viz.textContent = "📊";
+        viz.addEventListener("click", (event) => {
+          event.stopPropagation();
+          this.showVisualization(result.value, source);
         });
-      } else {
-        outputLine.textContent = output;
-      }
-
-      entry.appendChild(outputLine);
-    }
-
-    this.outputHistoryElement.appendChild(entry);
-
-    // Handle scrolling
-    if (this.isMobile() && document.body.classList.contains("keypad-visible")) {
-      // For mobile, wait for DOM update then ensure content stays above input
-      requestAnimationFrame(() => {
-        this.scrollToKeepAboveInput();
-      });
-    } else {
-      // For desktop, normal scroll to bottom
-      requestAnimationFrame(() => {
-        this.outputHistoryElement.scrollTop =
-          this.outputHistoryElement.scrollHeight;
-      });
-    }
-  }
-
-  escapeHtml(text) {
-    const div = document.createElement("div");
-    div.textContent = text;
-    return div.innerHTML;
-  }
-
-  displayWelcome() {
-    const welcome = document.createElement("div");
-    welcome.className = "output-entry";
-    welcome.innerHTML = `
-      <div class="output-line no-mobile" style="color: #059669; font-weight: 600;">
-        Welcome to RatCalc!
-      </div>
-      <div class="output-line no-mobile" style="margin-top: 0.5rem;">
-        Type mathematical expressions and press Enter to calculate.
-      </div>
-      <div class="output-line no-mobile">
-        Use the Help button or type HELP for detailed instructions.
-      </div>
-    `;
-    this.outputHistoryElement.appendChild(welcome);
-  }
-
-  showHelp() {
-    this.helpModal.style.display = "block";
-    document.body.style.overflow = "hidden";
-  }
-
-  hideHelp() {
-    this.helpModal.style.display = "none";
-    document.body.style.overflow = "auto";
-    // Delay focus to ensure modal is fully hidden (except on mobile)
-    if (!this.isMobile()) {
-      setTimeout(() => this.inputElement.focus(), 100);
-    }
-  }
-
-
-  clearHistory() {
-    this.outputHistoryElement.innerHTML = "";
-    this.outputHistory = [];
-    this.currentEntry = null;
-    this.variableManager.clear(); // Clear variables and functions
-    this.displayWelcome();
-    if (!this.isMobile()) {
-      setTimeout(() => this.inputElement.focus(), 100);
-    }
-  }
-
-  showVariables() {
-    const variables = this.variableManager.getVariables();
-    const functions = this.variableManager.getFunctions();
-
-    if (variables.size === 0 && functions.size === 0) {
-      const output = "No variables or functions defined";
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      return;
-    }
-
-    let output = "";
-
-    if (variables.size > 0) {
-      output += "Variables:\n";
-      for (const [name, value] of variables) {
-        output += `  ${name} = ${this.formatResult(value)}\n`;
+        outputLine.appendChild(viz);
       }
     }
-
-    if (functions.size > 0) {
-      if (output) output += "\n";
-      output += "Functions:\n";
-      for (const [name, func] of functions) {
-        output += `  ${name}[${func.params.join(",")}] = ${func.expression}\n`;
-      }
-    }
-
-    // Remove trailing newline
-    output = output.trim();
-    this.addToOutput("", output, false);
-    this.finishEntry(output);
+    entry.appendChild(outputLine);
+    this.output.appendChild(entry);
+    this.transcript.push(`> ${source}\n${result.text}`);
+    requestAnimationFrame(() => { this.output.scrollTop = this.output.scrollHeight; });
   }
 
-  async copySession() {
-    if (this.outputHistory.length === 0) {
-      // Show feedback for empty session
-      const originalText = this.copyButton.textContent;
-      this.copyButton.textContent = "Nothing to copy";
-      this.copyButton.style.background = "rgba(251, 146, 60, 0.9)";
-      this.copyButton.style.color = "white";
-
-      setTimeout(() => {
-        this.copyButton.textContent = originalText;
-        this.copyButton.style.background = "";
-        this.copyButton.style.color = "";
-        if (!this.isMobile()) {
-          this.inputElement.focus();
-        }
-      }, 2000);
-      return;
-    }
-
-    let text = "Ratmath Calculator Session\n";
-    text += "=".repeat(30) + "\n\n";
-
-    for (const entry of this.outputHistory) {
-      if (entry.input) {
-        text += `> ${entry.input}\n`;
-        if (entry.output) {
-          text += `${entry.output}\n`;
-        }
-        text += "\n";
-      }
-    }
-
-    try {
-      await navigator.clipboard.writeText(text);
-
-      // Show feedback
-      const originalText = this.copyButton.textContent;
-      this.copyButton.textContent = "✓ Copied!";
-      this.copyButton.style.background = "rgba(34, 197, 94, 0.9)";
-      this.copyButton.style.color = "white";
-
-      setTimeout(() => {
-        this.copyButton.textContent = originalText;
-        this.copyButton.style.background = "";
-        this.copyButton.style.color = "";
-      }, 2000);
-    } catch (error) {
-      console.error("Failed to copy to clipboard:", error);
-
-      // Mobile-friendly fallback: show text in a modal or new window
-      if (this.isMobile()) {
-        // Create a temporary textarea for mobile copy
-        const textarea = document.createElement("textarea");
-        textarea.value = text;
-        textarea.style.position = "fixed";
-        textarea.style.left = "-9999px";
-        document.body.appendChild(textarea);
-        textarea.select();
-        textarea.setSelectionRange(0, 99999);
-
-        try {
-          document.execCommand("copy");
-          const originalText = this.copyButton.textContent;
-          this.copyButton.textContent = "✓ Copied!";
-          this.copyButton.style.background = "rgba(34, 197, 94, 0.9)";
-          this.copyButton.style.color = "white";
-
-          setTimeout(() => {
-            this.copyButton.textContent = originalText;
-            this.copyButton.style.background = "";
-            this.copyButton.style.color = "";
-          }, 2000);
-        } catch (fallbackError) {
-          // Show text in a modal if all else fails
-          alert(text);
-        }
-
-        document.body.removeChild(textarea);
-      } else {
-        // Desktop fallback: show the text in a new window/tab
-        const newWindow = window.open("", "_blank");
-        newWindow.document.write(`<pre>${text}</pre>`);
-        newWindow.document.title = "Ratmath Calculator Session";
-      }
-    }
-  }
-
-  setupMobileKeypad() {
-    // Check if already setup to prevent duplicate listeners
-    if (this.mobileKeypadSetup) {
-      // Just show the keypad and update display
-      this.mobileKeypad.classList.add("show");
-      document.body.classList.add("keypad-visible");
-      this.updateMobileDisplay();
-      this.scrollToKeepAboveInput();
-      return;
-    }
-    this.mobileKeypadSetup = true;
-
-    // Show keypad by default on mobile
-    this.mobileKeypad.classList.add("show");
-    document.body.classList.add("keypad-visible");
-
-    // Show the input prompt immediately
-    setTimeout(() => {
-      this.updateMobileDisplay();
-      this.scrollToKeepAboveInput();
-    }, 50);
-
-    // Setup keypad buttons
-    const keypadButtons = document.querySelectorAll(".keypad-btn[data-key]");
-    keypadButtons.forEach((button) => {
-      button.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const key = button.getAttribute("data-key");
-        this.insertAtCursor(key);
-      });
-    });
-
-    // Setup action buttons
-    const actionButtons = document.querySelectorAll(".keypad-btn[data-action]");
-    actionButtons.forEach((button) => {
-      button.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const action = button.getAttribute("data-action");
-        if (action === "backspace") {
-          this.handleBackspace();
-        } else if (action === "clear") {
-          if (this.isMobile()) {
-            this.mobileInput = "";
-            this.updateMobileDisplay();
-          } else {
-            this.inputElement.value = "";
-            this.inputElement.focus();
-          }
-        } else if (action === "enter") {
-          this.processInput();
-        } else if (action === "help") {
-          this.showHelp();
-        } else if (action === "command") {
-          this.showCommandPanel();
-        }
-      });
-    });
-
-    // Setup command panel
-    this.closeCommandPanel.addEventListener("click", () => {
-      this.hideCommandPanel();
-    });
-
-    // Setup command buttons
-    const cmdButtons = document.querySelectorAll(".command-btn");
-    cmdButtons.forEach((button) => {
-      button.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const cmd = button.getAttribute("data-command");
-        if (this.isMobile()) {
-          this.mobileInput = cmd;
-          this.hideCommandPanel();
-          if (cmd !== "LIMIT ") {
-            this.processExpression(cmd);
-            this.mobileInput = "";
-          } else {
-            this.updateMobileDisplay();
-          }
-        } else {
-          this.inputElement.value = cmd;
-          this.hideCommandPanel();
-          if (cmd !== "LIMIT ") {
-            this.processInput();
-          } else {
-            this.inputElement.focus();
-            this.inputElement.setSelectionRange(6, 6);
-          }
-        }
-      });
-    });
-
-    // Prevent keyboard from showing on input focus when keypad is active
-    this.inputElement.addEventListener("focus", (e) => {
-      if (this.isMobile() && this.mobileKeypad.classList.contains("show")) {
-        e.preventDefault();
-        this.inputElement.blur();
-      }
-    });
-
-    // Add scroll listener to enforce boundary
-    this.outputHistoryElement.addEventListener("scroll", () => {
-      if (document.body.classList.contains("keypad-visible")) {
-        requestAnimationFrame(() => this.enforceScrollBoundary());
-      }
-    });
-  }
-
-  updateMobileDisplay() {
-    if (this.isMobile()) {
-      // Show current input in a temporary div at bottom of calculator
-      let tempDiv = document.getElementById("mobileInputDisplay");
-      //console.log("seen");
-      /*
-      // Always show the prompt when on mobile
-      if (!tempDiv) {
-        tempDiv = document.createElement("div");
-        tempDiv.id = "mobileInputDisplay";
-        // Remove inline styles - let CSS handle it
-        const calculator = document.querySelector(".calculator");
-        if (calculator) {
-          calculator.appendChild(tempDiv);
-        }
-      }
-  */
-      // Update the content
-      tempDiv.innerHTML = `<span style="color: #059669; font-weight: bold; font-size: 0.95rem; margin-right: 6px;">></span> <span style="font-size: 0.9rem;">${this.escapeHtml(this.mobileInput || "")}</span>`;
-
-      // Ensure visibility when keypad is visible
-      if (document.body.classList.contains("keypad-visible")) {
-        tempDiv.style.display = "flex";
-        // Auto-scroll to bottom when typing
-        this.scrollToKeepAboveInput();
-      } else {
-        tempDiv.style.display = "none";
-      }
-    }
-  }
-
-  scrollToKeepAboveInput() {
-    /*console.log(
-      "scroll above",
-      this.outputHistoryElement.scrollTop,
-      this.outputHistoryElement.scrollHeight,
-    );*/
-    // Simple scroll to bottom - flexbox layout handles the rest
-    this.outputHistoryElement.scrollTop =
-      this.outputHistoryElement.scrollHeight;
-    /*console.log(
-      "scroll below",
-      this.outputHistoryElement.scrollTop,
-      this.outputHistoryElement.scrollHeight,
-    );*/
-  }
-
-  enforceScrollBoundary() {
-    // Get the mobile input display
-    const inputDisplay = document.getElementById("mobileInputDisplay");
-    if (!inputDisplay) return;
-
-    // Immediately call scrollToKeepAboveInput to fix any issues
-    this.scrollToKeepAboveInput();
-  }
-
-  reloadExpression(expression) {
-    if (this.isMobile()) {
-      this.mobileInput = expression;
-      this.updateMobileDisplay();
-    } else {
-      this.inputElement.value = expression;
-      this.inputElement.focus();
-    }
-  }
-
-  injectValue(value) {
-    if (this.isMobile()) {
-      this.mobileInput += value;
-      this.updateMobileDisplay();
-    } else {
-      this.insertAtCursor(value);
-    }
-  }
-
-  extractValue(output) {
-    // Extract numeric value from output string
-    const match = output.match(/^([\d\/.:\-]+)/);
-    return match ? match[1] : "";
+  /** Source text that recreates a value: Core values as R`...`. */
+  injection(value) {
+    if (value instanceof RationalInterval) return `R\`${value.low}:${value.high}\``;
+    if (value?.constructor?.name === "Rational" || value?.constructor?.name === "Integer") return `R\`${value}\``;
+    return "ans";
   }
 
   insertAtCursor(text) {
     if (this.isMobile()) {
       this.mobileInput += text;
       this.updateMobileDisplay();
-    } else {
-      const start = this.inputElement.selectionStart;
-      const end = this.inputElement.selectionEnd;
-      const value = this.inputElement.value;
-      this.inputElement.value =
-        value.substring(0, start) + text + value.substring(end);
-      this.inputElement.selectionStart = this.inputElement.selectionEnd =
-        start + text.length;
-      this.inputElement.focus();
+      return;
     }
+    const { selectionStart: start, selectionEnd: end, value } = this.input;
+    this.input.value = value.slice(0, start) + text + value.slice(end);
+    this.input.selectionStart = this.input.selectionEnd = start + text.length;
+    this.input.focus();
   }
 
-  handleBackspace() {
+  backspace() {
     if (this.isMobile()) {
-      if (this.mobileInput.length > 0) {
-        this.mobileInput = this.mobileInput.slice(0, -1);
-        this.updateMobileDisplay();
-      }
-    } else {
-      const start = this.inputElement.selectionStart;
-      const end = this.inputElement.selectionEnd;
-      const value = this.inputElement.value;
-
-      if (start !== end) {
-        // Delete selection
-        this.inputElement.value =
-          value.substring(0, start) + value.substring(end);
-        this.inputElement.selectionStart = this.inputElement.selectionEnd =
-          start;
-      } else if (start > 0) {
-        // Delete character before cursor
-        this.inputElement.value =
-          value.substring(0, start - 1) + value.substring(start);
-        this.inputElement.selectionStart = this.inputElement.selectionEnd =
-          start - 1;
-      }
-      this.inputElement.focus();
+      this.mobileInput = this.mobileInput.slice(0, -1);
+      this.updateMobileDisplay();
+      return;
     }
+    const { selectionStart: start, selectionEnd: end, value } = this.input;
+    const from = start === end ? Math.max(0, start - 1) : start;
+    this.input.value = value.slice(0, from) + value.slice(end);
+    this.input.selectionStart = this.input.selectionEnd = from;
+    this.input.focus();
   }
 
-  showCommandPanel() {
-    this.commandPanel.classList.add("show");
-  }
-
-  hideCommandPanel() {
-    this.commandPanel.classList.remove("show");
-  }
-
-  showVisualization(result, expression = "") {
-    // Clear previous visualization
-    this.visualizationContainer.innerHTML = "";
-
-    if (this.currentVisualization) {
-      this.currentVisualization.destroy();
-      this.currentVisualization = null;
-    }
-
-    if (result instanceof RationalInterval) {
-      // Check if this is an operation
-      const isOperation = expression.includes('+') || expression.includes('-') ||
-        expression.includes('*') || expression.includes('/');
-
-      if (isOperation) {
-        // Parse the expression tree
-        const operationTree = this.parseOperationExpression(expression);
-
-        if (operationTree && operationTree.type === 'operation') {
-          // Complex multi-step operation - use MultiStepVisualization
-          this.currentVisualization = new MultiStepVisualization(this.visualizationContainer, {
-            width: this.visualizationContainer.clientWidth || Math.min(window.innerWidth - 100, 900)
-          });
-
-          this.currentVisualization.visualizeExpressionTree(operationTree, result);
-          this.updateVisualizationStepSize(); // Apply current step size
-        } else {
-          // Fallback to simple visualization
-          this.currentVisualization = new IntervalVisualization(this.visualizationContainer, {
-            width: this.visualizationContainer.clientWidth || Math.min(window.innerWidth - 100, 800),
-            height: 200
-          });
-
-          // Use expression as label if it's simple, otherwise use "Interval"
-          const label = expression && expression.length <= 20 ? expression : "Interval";
-          this.currentVisualization.addInterval(result, {
-            label: label,
-            color: "#2563eb",
-            draggable: true
-          });
-          this.updateVisualizationStepSize(); // Apply current step size
-        }
-      } else {
-        // Simple interval visualization
-        this.currentVisualization = new IntervalVisualization(this.visualizationContainer, {
-          width: this.visualizationContainer.clientWidth || Math.min(window.innerWidth - 100, 800),
-          height: 200
-        });
-
-        // Use expression as label if it's simple, otherwise use "Interval"
-        const label = expression && expression.length <= 20 ? expression : "Interval";
-        this.currentVisualization.addInterval(result, {
-          label: label,
-          color: "#2563eb",
-          draggable: true
-        });
-        this.updateVisualizationStepSize(); // Apply current step size
-      }
-
-      // Listen for interval changes
-      this.visualizationContainer.addEventListener('intervalChange', (e) => {
-        // Update the save button to reflect changes
-        this.saveComputationBtn.textContent = "Save Modified Interval";
-        this.saveComputationBtn.classList.add("modified");
+  setupKeypad() {
+    for (const button of this.root.querySelectorAll(".keypad-btn[data-key]")) {
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        this.insertAtCursor(button.dataset.key);
       });
     }
+    const actions = {
+      backspace: () => this.backspace(),
+      clear: () => this.setInput(""),
+      enter: () => this.submit(),
+      help: () => this.showHelp(),
+      command: () => this.commandPanel.classList.add("show"),
+    };
+    for (const button of this.root.querySelectorAll(".keypad-btn[data-action]")) {
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        actions[button.dataset.action]?.();
+      });
+    }
+    this.$("closeCommandPanel").addEventListener("click", () => this.commandPanel.classList.remove("show"));
+    for (const button of this.root.querySelectorAll(".command-btn")) {
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        this.commandPanel.classList.remove("show");
+        this.run(button.dataset.command);
+      });
+    }
+    if (this.isMobile()) {
+      for (const [name, value] of [["inputmode", "none"], ["autocomplete", "off"], ["autocorrect", "off"], ["autocapitalize", "off"]]) {
+        this.input.setAttribute(name, value);
+      }
+      this.keypad.classList.add("show");
+      document.body.classList.add("keypad-visible");
+      this.updateMobileDisplay();
+    }
+  }
 
-    // Show modal
+  updateMobileDisplay() {
+    if (!this.mobileDisplay) return;
+    this.mobileDisplay.innerHTML = '<span class="mobile-prompt">></span> <span class="mobile-text"></span>';
+    this.mobileDisplay.querySelector(".mobile-text").textContent = this.mobileInput;
+    this.mobileDisplay.style.display = document.body.classList.contains("keypad-visible") ? "flex" : "none";
+    this.output.scrollTop = this.output.scrollHeight;
+  }
+
+  displayWelcome() {
+    const welcome = document.createElement("div");
+    welcome.className = "output-entry welcome";
+    welcome.innerHTML = `
+      <div class="output-line no-mobile" style="color: #059669; font-weight: 600;">Welcome to RatCalc — JavaScript with exact rational arithmetic.</div>
+      <div class="output-line no-mobile">Try <code>R\`1:2 + 3\`</code>, <code>let x = R\`1/3\`</code>, or <code>[1, 2, 3].map(n =&gt; R\`1/\${n}\`)</code>.</div>
+      <div class="output-line no-mobile">Type <code>help()</code> or use the Help button.</div>`;
+    this.output.appendChild(welcome);
+  }
+
+  clearOutput() {
+    this.output.innerHTML = "";
+    this.transcript = [];
+    this.displayWelcome();
+  }
+
+  showHelp() {
+    this.helpModal.style.display = "block";
+  }
+
+  hideModal(modal) {
+    if (modal === this.visualizationModal) return this.hideVisualization();
+    modal.style.display = "none";
+    if (!this.isMobile()) setTimeout(() => this.input.focus(), 50);
+  }
+
+  async copySession() {
+    const text = this.transcript.join("\n");
+    const label = this.copyButton.textContent;
+    try {
+      if (!text) throw new Error("empty");
+      await navigator.clipboard.writeText(text);
+      this.copyButton.textContent = "Copied";
+    } catch {
+      this.copyButton.textContent = text ? "Copy failed" : "Nothing to copy";
+    }
+    setTimeout(() => { this.copyButton.textContent = label; }, 1500);
+  }
+
+  showVisualization(interval, label) {
+    this.visualizationContainer.innerHTML = "";
+    this.visualization?.destroy?.();
+    this.visualization = new IntervalVisualization(this.visualizationContainer, {
+      width: this.visualizationContainer.clientWidth || Math.min(window.innerWidth - 100, 800),
+      height: 200,
+    });
+    this.visualization.addInterval(interval, { label: label.length <= 24 ? label : "Interval", color: "#2563eb", draggable: true });
+    this.updateStepSize();
     this.visualizationModal.style.display = "block";
-    document.body.style.overflow = "hidden";
   }
 
   hideVisualization() {
     this.visualizationModal.style.display = "none";
-    document.body.style.overflow = "auto";
-
-    if (this.currentVisualization) {
-      this.currentVisualization.destroy();
-      this.currentVisualization = null;
-    }
-
-    // Reset save button
-    this.saveComputationBtn.textContent = "Save to Calculator";
-    this.saveComputationBtn.classList.remove("modified");
-
-    // Reset step size to default
-    this.stepSizeInput.value = "10";
-
-    // Delay focus to ensure modal is fully hidden (except on mobile)
-    if (!this.isMobile()) {
-      setTimeout(() => this.inputElement.focus(), 100);
-    }
+    this.visualization?.destroy?.();
+    this.visualization = null;
   }
 
-  handleStepSizeKeydown(e) {
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      const currentValue = parseInt(this.stepSizeInput.value) || 10;
-      this.stepSizeInput.value = Math.max(1, currentValue + 1);
-      this.updateVisualizationStepSize();
-    } else if (e.key === "ArrowDown") {
-      e.preventDefault();
-      const currentValue = parseInt(this.stepSizeInput.value) || 10;
-      this.stepSizeInput.value = Math.max(1, currentValue - 1);
-      this.updateVisualizationStepSize();
-    }
+  updateStepSize() {
+    const n = Math.max(1, Number.parseInt(this.stepSizeInput.value, 10) || 10);
+    this.visualization?.setDragStepSize?.(this.session.evaluate(`R\`1/${n}\``).value);
   }
 
-  handleVisualizationKeydown(e) {
-    // Handle up/down for step size everywhere except input fields
-    // Left/right only handled by selected intervals
-    if (e.target.tagName.toLowerCase() === 'input') {
-      return; // Let input handle its own keys
-    }
-
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      const currentValue = parseInt(this.stepSizeInput.value) || 10;
-      this.stepSizeInput.value = Math.max(1, currentValue + 1);
-      this.updateVisualizationStepSize();
-    } else if (e.key === "ArrowDown") {
-      e.preventDefault();
-      const currentValue = parseInt(this.stepSizeInput.value) || 10;
-      this.stepSizeInput.value = Math.max(1, currentValue - 1);
-      this.updateVisualizationStepSize();
-    }
-    // Let selected intervals handle left/right arrows
+  saveVisualization() {
+    const interval = this.visualization?.intervals?.[0]?.interval;
+    if (!interval) return;
+    this.insertAtCursor(this.injection(interval));
+    this.hideVisualization();
   }
 
-  updateVisualizationStepSize() {
-    const n = parseInt(this.stepSizeInput.value) || 10;
-    const stepSize = new Rational(1, n); // 1/n
-
-    if (this.currentVisualization) {
-      if (this.currentVisualization.setDragStepSize) {
-        // Single visualization
-        this.currentVisualization.setDragStepSize(stepSize);
-      } else if (this.currentVisualization.stages) {
-        // Multi-step visualization - update all stage visualizations
-        this.currentVisualization.stages.forEach(stage => {
-          if (stage.visualization && stage.visualization.setDragStepSize) {
-            stage.visualization.setDragStepSize(stepSize);
-          }
-        });
-      }
-    }
-  }
-
-
-  exportVisualizationSVG() {
-    if (this.currentVisualization) {
-      const svgData = this.currentVisualization.exportSVG();
-      const blob = new Blob([svgData], { type: 'image/svg+xml' });
-      const url = URL.createObjectURL(blob);
-
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = 'interval_visualization.svg';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-    }
-  }
-
-  exportVisualizationHTML() {
-    if (this.currentVisualization && this.currentVisualization.exportHTML) {
-      const htmlData = this.currentVisualization.exportHTML();
-      const blob = new Blob([htmlData], { type: 'text/html' });
-      const url = URL.createObjectURL(blob);
-
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = 'interval_visualization.html';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-    }
-  }
-
-  saveVisualizationToCalculator() {
-    if (!this.currentVisualization) return;
-
-    let interval = null;
-
-    if (this.currentVisualization instanceof MultiStepVisualization) {
-      // For multi-step visualization, get the result from the last stage
-      if (this.currentVisualization.stages.length > 0) {
-        const lastStage = this.currentVisualization.stages[this.currentVisualization.stages.length - 1];
-        if (lastStage.type === 'operation' && lastStage.result) {
-          interval = lastStage.result;
-        }
-      }
-    } else if (this.currentVisualization.intervals && this.currentVisualization.intervals.length > 0) {
-      // For simple visualizations, get the first/result interval
-      const intervalData = this.currentVisualization.intervals[0];
-      interval = intervalData.interval;
-    }
-
-    if (interval) {
-      // Format the interval and inject it
-      const value = `${interval.low.toString()}:${interval.high.toString()}`;
-      this.injectValue(value);
-
-      // Hide visualization
-      this.hideVisualization();
-    }
-  }
-
-  handleBaseCommand(command) {
-    const parts = command.split(/\s+/);
-
-    if (parts.length === 1) {
-      // Just "BASE" - show current base configuration
-      let output;
-      if (
-        this.outputBases.length === 1 &&
-        this.inputBase.equals(this.outputBases[0])
-      ) {
-        output = `Current base: ${this.inputBase.name} (base ${this.inputBase.base})`;
-      } else {
-        output = `Input base: ${this.inputBase.name} (base ${this.inputBase.base})\n` +
-          `Output base${this.outputBases.length > 1 ? "s" : ""}: ${this.outputBases.map((b) => `${b.name} (base ${b.base})`).join(", ")}`;
-      }
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      return;
-    }
-
-    const baseSpec = parts.slice(1).join(" ");
-
-    // Check for input->output notation: BASE 3->10 or BASE 3->[10,5,3]
-    if (baseSpec.includes("->")) {
-      this.handleInputOutputBaseCommand(baseSpec);
-      return;
-    }
-
-    // Check for single character prefix (e.g., "BASE t")
-    if (baseSpec.length === 1) {
-      const prefixSystem = BaseSystem.getSystemForPrefix(baseSpec);
-      if (prefixSystem) {
-        this.inputBase = prefixSystem;
-        this.outputBases = [prefixSystem]; // Align with calc: switching base sets both input and output
-        this.variableManager.setInputBase(prefixSystem);
-
-        const prefix = BaseSystem.getPrefixForSystem(prefixSystem);
-        const prefixInfo = prefix ? ` (prefix 0${prefix})` : "";
-        const output = `Base set to ${prefixSystem.name}${prefixInfo} (base ${prefixSystem.base})`;
-        this.addToOutput("", output, false);
-        this.finishEntry(output);
-        return;
-      }
-    }
-
-    // Legacy behavior: set both input and output to same base
-    this.handleLegacyBaseCommand(baseSpec);
-  }
-
-  handleInputOutputBaseCommand(baseSpec) {
-    const [inputSpec, outputSpec] = baseSpec.split("->", 2);
-
-    if (!inputSpec.trim() || !outputSpec.trim()) {
-      const output = "Error: Invalid input->output format. Use BASE 3->10 or BASE 3->[10,5,3]";
-      this.addToOutput("", output, true);
-      this.currentEntry.isError = true;
-      this.finishEntry(output);
-      return;
-    }
-
-    // Parse input base
-    try {
-      this.inputBase = this.parseBaseSpec(inputSpec.trim());
-      this.variableManager.setInputBase(this.inputBase);
-    } catch (error) {
-      const output = `Error parsing input base: ${error.message}`;
-      this.addToOutput("", output, true);
-      this.currentEntry.isError = true;
-      this.finishEntry(output);
-      return;
-    }
-
-    // Parse output base(s)
-    try {
-      const trimmedOutput = outputSpec.trim();
-      if (trimmedOutput.startsWith("[") && trimmedOutput.endsWith("]")) {
-        // Multiple output bases: [10,5,3]
-        const baseSpecs = trimmedOutput
-          .slice(1, -1)
-          .split(",")
-          .map((s) => s.trim());
-        if (baseSpecs.length === 0) {
-          throw new Error("Empty output base list");
-        }
-        this.outputBases = baseSpecs.map((spec) => this.parseBaseSpec(spec));
-      } else {
-        // Single output base: 10
-        this.outputBases = [this.parseBaseSpec(trimmedOutput)];
-      }
-    } catch (error) {
-      const output = `Error parsing output base(s): ${error.message}`;
-      this.addToOutput("", output, true);
-      this.currentEntry.isError = true;
-      this.finishEntry(output);
-      return;
-    }
-
-    // Success message
-    const outputBaseNames = this.outputBases
-      .map((b) => `${b.name} (base ${b.base})`)
-      .join(", ");
-    const output = `Input base: ${this.inputBase.name} (base ${this.inputBase.base})\n` +
-      `Output base${this.outputBases.length > 1 ? "s" : ""}: ${outputBaseNames}`;
-    this.addToOutput("", output, false);
-    this.finishEntry(output);
-  }
-
-  handleLegacyBaseCommand(baseSpec) {
-    try {
-      const base = this.parseBaseSpec(baseSpec);
-      this.inputBase = base;
-      this.outputBases = [base];
-      this.variableManager.setInputBase(base);
-      const output = `Base set to ${base.name} (base ${base.base})`;
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-    } catch (error) {
-      const output = `Error: ${error.message}`;
-      this.addToOutput("", output, true);
-      this.currentEntry.isError = true;
-      this.finishEntry(output);
-    }
-  }
-
-  handleBasesCommand(args) {
-    const parts = args.split(",").map((p) => p.trim());
-    let output = "";
-    const errors = [];
-
-    for (const part of parts) {
-      if (part.includes(":")) {
-        const [prefix, def] = part.split(":").map((s) => s.trim());
-        if (prefix.length !== 1) {
-          errors.push(`Prefix '${prefix}' must be a single character`);
-          continue;
-        }
-        try {
-          const base = this.parseBaseSpec(def);
-          BaseSystem.registerPrefix(prefix, base);
-          output += `Linked prefix '0${prefix}' to ${base.name}\n`;
-        } catch (e) {
-          errors.push(`Error linking '${prefix}': ${e.message}`);
-        }
-      } else {
-        errors.push(`Invalid format '${part}'. Use prefix:base (e.g. t:32)`);
-      }
-    }
-
-    if (errors.length > 0) {
-      output += "\nErrors:\n" + errors.join("\n");
-    }
-
-    if (output) {
-      this.addToOutput("", output.trim(), errors.length > 0);
-      this.finishEntry(output.trim());
-    }
-  }
-
-  parseBaseSpec(baseSpec) {
-    const trimmed = baseSpec.trim();
-
-    // Support inline prefix registration (e.g. t:32)
-    if (
-      trimmed.includes(":") &&
-      !trimmed.startsWith("[") &&
-      !trimmed.endsWith("]")
-    ) {
-      const splitIndex = trimmed.indexOf(":");
-      const prefix = trimmed.substring(0, splitIndex).trim();
-      const def = trimmed.substring(splitIndex + 1).trim();
-
-      if (prefix.length === 1) {
-        try {
-          const base = this.parseBaseSpec(def);
-          BaseSystem.registerPrefix(prefix, base);
-          return base;
-        } catch (e) {
-          // Fall through if it's not a valid registration
-        }
-      }
-    }
-
-    // 1. Check for registered prefixes (case-insensitive)
-    const prefixSystem = BaseSystem.getSystemForPrefix(trimmed);
-    if (prefixSystem) return prefixSystem;
-
-    // 2. Check for common base names
-    const upper = trimmed.toUpperCase();
-    if (upper === "BIN" || upper === "BINARY") return BaseSystem.BINARY;
-    if (upper === "OCT" || upper === "OCTAL") return BaseSystem.OCTAL;
-    if (upper === "HEX" || upper === "HEXADECIMAL")
-      return BaseSystem.HEXADECIMAL;
-    if (upper === "DEC" || upper === "DECIMAL") return BaseSystem.DECIMAL;
-
-    // 3. Check if it's a pure numeric base
-    const numericBase = parseInt(trimmed);
-    const isNumericBaseId =
-      !isNaN(numericBase) &&
-      /^\d+$/.test(trimmed) &&
-      numericBase >= 2 &&
-      numericBase <= 62 &&
-      !trimmed.startsWith("0");
-
-    if (isNumericBaseId) {
-      if (this.customBases.has(numericBase)) {
-        return this.customBases.get(numericBase);
-      }
-      return BaseSystem.fromBase(numericBase);
-    }
-
-    // If strictly numeric but failed above (e.g. 1, 01, 70), or non-numeric:
-    // Try as character sequence.
-    if (trimmed.length >= 2) {
-      return new BaseSystem(trimmed, `Custom Base ${trimmed}`);
-    }
-
-    throw new Error(
-      "Invalid base specification. Use a prefix (x, b, o, d, t), a name (HEX, BIN), a number (2-62), or character sequence (min length 2)",
-    );
-  }
-
-  showBases() {
-    let output = "Available base systems:\n\nStandard bases:\n";
-    output += "  Binary (BIN):       base 2\n";
-    output += "  Octal (OCT):        base 8\n";
-    output += "  Decimal (DEC):      base 10\n";
-    output += "  Hexadecimal (HEX):  base 16\n";
-    output += "  Base 36:            base 36\n";
-    output += "  Base 62:            base 62\n\n";
-    output += "Base commands:\n";
-    output += "  BASE                - Show current base\n";
-    output += "  BASE <n>            - Set base to n (2-62)\n";
-    output += "  BASE <a>:<n>        - Set base to n (2-62) and link to prefix a (a-Z)\n";
-    output += "  BASE <sequence>     - Set custom base using character sequence\n";
-    output += "  BASE <in>-><out>    - Set input base <in> and output base <out>\n";
-    output += "  BASE <in>->[<out1>,<out2>,...] - Set input base and multiple output bases\n";
-    output += "  BIN, HEX, OCT, DEC  - Quick base shortcuts\n";
-    output += "  BASES               - Show this help\n";
-    output += "  BASES a:n, b:m...   - Link multiple prefixes to bases (e.g., BASES t:32, z:62)";
-
-    this.addToOutput("", output, false);
-    this.finishEntry(output);
-  }
-
-  parseExpressionTree(expr) {
-    // Remove outer parentheses if they wrap the whole expression
-    expr = expr.trim();
-    if (expr.startsWith('(') && expr.endsWith(')')) {
-      let depth = 0;
-      let valid = true;
-      for (let i = 0; i < expr.length - 1; i++) {
-        if (expr[i] === '(') depth++;
-        else if (expr[i] === ')') depth--;
-        if (depth === 0) {
-          valid = false;
-          break;
-        }
-      }
-      if (valid) expr = expr.slice(1, -1).trim();
-    }
-
-    // Check if this might be an interval - if it contains ':', be more careful with operators
-    const hasColon = expr.includes(':');
-
-    // Find operators by precedence (+ and - have lower precedence than * and /)
-    const operators = [
-      { symbols: ['+', '-'], precedence: 1 },
-      { symbols: ['*', '/'], precedence: 2 }
-    ];
-
-    for (const opGroup of operators) {
-      let parenDepth = 0;
-      // Scan from right to left to handle left-associativity
-      for (let i = expr.length - 1; i >= 0; i--) {
-        if (expr[i] === ')') parenDepth++;
-        else if (expr[i] === '(') parenDepth--;
-        else if (parenDepth === 0 && opGroup.symbols.includes(expr[i])) {
-          const leftExpr = expr.substring(0, i).trim();
-          const rightExpr = expr.substring(i + 1).trim();
-          const operator = expr[i];
-
-          // Skip if this is a negative sign at the beginning of the expression
-          // or if the left expression would be empty or only whitespace
-          if (operator === '-' && (leftExpr === '' || leftExpr.trim() === '')) {
-            continue;
-          }
-
-          // Also skip if this minus follows an operator (indicating negative number)
-          if (operator === '-' && i > 0) {
-            // Look backwards for the previous non-whitespace character
-            let prevChar = '';
-            for (let j = i - 1; j >= 0; j--) {
-              if (expr[j] !== ' ') {
-                prevChar = expr[j];
-                break;
-              }
-            }
-            if (['+', '-', '*', '/', '(', ':'].includes(prevChar)) {
-              continue;
-            }
-          }
-
-          // Special check for intervals: if we have a colon and this is a division,
-          // check if this division might be part of interval notation
-          if (hasColon && operator === '/') {
-            // Check if the colon is in the right side (like "5/3:2")
-            if (rightExpr.includes(':')) {
-              continue;
-            }
-            // Check if the colon is in the left side (like "1/2:3/4" where we found the second /)
-            if (leftExpr.includes(':')) {
-              continue;
-            }
-            // Also try parsing the whole expression as an interval
-            try {
-              Parser.parse(expr);
-              // If it parses successfully as an interval, skip this division
-              continue;
-            } catch (e) {
-              // If it doesn't parse as an interval, proceed with division
-            }
-          }
-
-          // Recursively parse sub-expressions
-          const leftTree = this.parseExpressionTree(leftExpr);
-          const rightTree = this.parseExpressionTree(rightExpr);
-
-          const operationMap = {
-            '+': 'add',
-            '-': 'subtract',
-            '*': 'multiply',
-            '/': 'divide'
-          };
-
-          return {
-            type: 'operation',
-            operator: operator,
-            operation: operationMap[operator],
-            left: leftTree,
-            right: rightTree
-          };
-        }
-      }
-    }
-
-    // No operators found, this is a leaf node (number or interval)
-    try {
-      const value = Parser.parse(expr);
-      const interval = value instanceof RationalInterval ? value :
-        RationalInterval.point(value instanceof Integer ? value.toRational() : value);
-
-      return {
-        type: 'value',
-        value: interval,
-        expression: expr,
-        isInput: true // Mark as input so it can be draggable
-      };
-    } catch (e) {
-      console.error("Failed to parse value:", expr, e);
-      return null;
-    }
-  }
-
-  loadModulesFromUrl() {
-    if (typeof window === 'undefined' || !window.location) return;
-
-    const params = new URLSearchParams(window.location.search);
-    const loadParam = params.get('load');
-    if (loadParam) {
-      const urls = loadParam.split(',');
-      for (const url of urls) {
-        if (url.trim()) {
-          this.handleLoadCommand(url.trim())
-            .then(msg => this.addToOutput("", msg, false))
-            .catch(e => this.addToOutput("", `Auto-load error: ${e.message}`, true));
-        }
-      }
-    }
-  }
-
-  async handleLoadCommand(inputUrl) {
-    try {
-      let url = inputUrl;
-      let moduleName = "";
-
-      if (inputUrl.startsWith("@@")) {
-        // Defined convention: @@Module -> /modules/Module.rat (or similar)
-        // For now, let's assume relative path check
-        const name = inputUrl.substring(2).replace(/@$/, "");
-        moduleName = name;
-        url = `${name}.rat`; // Default assumption for web: try fetching .rat file relative
-      } else {
-        const basename = url.split(/[/\]/).pop().split(/[?#]/)[0].split('.')[0];
-        moduleName = basename.charAt(0).toUpperCase() + basename.slice(1);
-      }
-
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch ${url} (Status ${response.status})`);
-      }
-
-      const content = await response.text();
-
-      // We can reuse manual parsing logic, logic similar to CLI
-      // But here we might want to be safer or strictly assume .rat script format
-      // If .js, we can't easily dynamic import(url) cross-origin or even same-origin easily without module setup.
-      // Restrict Web Load to .rat scripts for now unless it ends in .js and we try shim?
-      // Let's support .rat scripts primarily.
-
-      if (url.endsWith(".js")) {
-        // Dynamic import for web? 
-        // import(url) works in modern browsers for modules.
-        try {
-          const mod = await import(url);
-          const scope = mod.default || mod;
-          if (!scope.functions && !scope.variables) {
-            return `Warning: JS Module '${moduleName}' does not seem to export 'functions' or 'variables'.`;
-          }
-          return this.variableManager.loadModule(moduleName, scope);
-        } catch (e) {
-          throw new Error(`JS Import failed: ${e.message}. Note: WebCalc supports .rat scripts best.`);
-        }
-      } else {
-        // Rat Script
-        const tempVM = new VariableManager();
-        tempVM.setCustomBases(this.customBases);
-        tempVM.setInputBase(this.inputBase);
-
-        const lines = content.split('\n');
-        for (const line of lines) {
-          if (!line.trim() || line.trim().startsWith("#") || line.trim().startsWith("//")) continue;
-          try {
-            tempVM.processInput(line);
-          } catch (e) { }
-        }
-
-        const modScope = {
-          functions: Object.fromEntries(tempVM.getFunctions()),
-          variables: Object.fromEntries(tempVM.getVariables())
-        };
-        return this.variableManager.loadModule(moduleName, modScope);
-      }
-
-    } catch (error) {
-      throw error; // Propagate to caller
-    }
+  download(name, type, data) {
+    if (!data) return;
+    const url = URL.createObjectURL(new Blob([data], { type }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    link.click();
+    URL.revokeObjectURL(url);
   }
 }
 
-if (typeof document !== "undefined") {
-  document.addEventListener("DOMContentLoaded", () => {
-    new WebCalculator();
-  });
+if (typeof document !== "undefined" && typeof document.getElementById === "function" && document.getElementById("calculatorInput")) {
+  globalThis.ratcalc = new WebCalculator(document);
 }
-
-export { WebCalculator };

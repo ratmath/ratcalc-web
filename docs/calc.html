@@ -4,16 +4,17 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>RatCalc - Exact Rational Calculator</title>
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; worker-src 'none'">
+  <title>RatCalc - JavaScript with Exact Rational Arithmetic</title>
   <meta name="description"
-    content="RatCalc - Interactive calculator for exact rational arithmetic and interval arithmetic using the RatMath library">
+    content="RatCalc - a JavaScript calculator with exact rational and interval arithmetic from RatMath Core">
   <meta name="keywords" content="calculator, rational, arithmetic, fractions, exact, mathematics, intervals">
   <meta name="author" content="James Taylor">
   <link rel="icon"
     href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧮</text></svg>">
   <link rel="stylesheet" href="calc.css">
 </head>
-</edits>
 
 <body>
   <a href="index.html" class="home-link" title="RatMath Home">
@@ -22,7 +23,7 @@
   <div class="container">
     <header class="no-mobile">
       <h1>RatCalc</h1>
-      <p>Exact rational arithmetic calculator with interval support</p>
+      <p>JavaScript with exact rational and interval arithmetic</p>
     </header>
 
     <div class="calculator">
@@ -31,7 +32,7 @@
       <div class="input-section">
         <div class="prompt">></div>
         <input type="text" id="calculatorInput" class="calculator-input"
-          placeholder="Enter expression (type HELP for help)" autocomplete="off" spellcheck="false">
+          placeholder="JavaScript with R`…` exact arithmetic — help() for help" autocomplete="off" spellcheck="false">
       </div>
 
       <div id="mobileInputDisplay" class="mobile"></div>
@@ -64,16 +65,16 @@
           <!-- Row 4 -->
           <button class="keypad-btn" data-key="0">0</button>
           <button class="keypad-btn" data-key=".">.</button>
-          <button class="keypad-btn" data-key=",">,</button>
           <button class="keypad-btn" data-key=":">:</button>
+          <button class="keypad-btn" data-key="^">^</button>
           <button class="keypad-btn" data-key="#">#</button>
 
           <!-- Row 5 -->
-          <button class="keypad-btn" data-key="[">[</button>
-          <button class="keypad-btn" data-key="]">]</button>
-          <button class="keypad-btn" data-key=" ">SPC</button>
-          <button class="keypad-btn" data-key="^">^</button>
-          <button class="keypad-btn" data-key="!">!</button>
+          <button class="keypad-btn" data-key="R`">R`</button>
+          <button class="keypad-btn" data-key="`">`</button>
+          <button class="keypad-btn" data-key="${">${</button>
+          <button class="keypad-btn" data-key="}">}</button>
+          <button class="keypad-btn" data-key=" = "> = </button>
 
           <!-- Row 6 - Action buttons -->
           <button class="keypad-btn keypad-backspace" data-action="backspace">⌫</button>
@@ -105,15 +106,15 @@
       <button id="closeCommandPanel" class="close-command-panel">×</button>
     </div>
     <div class="command-buttons">
-      <button class="command-btn" data-command="HELP">HELP</button>
-      <button class="command-btn" data-command="DECI">DECI</button>
-      <button class="command-btn" data-command="RAT">RAT</button>
-      <button class="command-btn" data-command="BOTH">BOTH</button>
-      <button class="command-btn" data-command="SCI">SCI</button>
-      <button class="command-btn" data-command="CF">CF</button>
-      <button class="command-btn" data-command="MIX">MIX</button>
-      <button class="command-btn" data-command="LIMIT ">LIMIT</button>
-      <button class="command-btn" data-command="CLEAR">CLEAR</button>
+      <button class="command-btn" data-command="help()">help()</button>
+      <button class="command-btn" data-command="vars()">vars()</button>
+      <button class="command-btn" data-command='display("both")'>both</button>
+      <button class="command-btn" data-command='display("exact")'>exact</button>
+      <button class="command-btn" data-command='display("decimal")'>decimal</button>
+      <button class="command-btn" data-command='display("mixed")'>mixed</button>
+      <button class="command-btn" data-command='display("cf")'>cont. frac.</button>
+      <button class="command-btn" data-command="ans">ans</button>
+      <button class="command-btn" data-command="clear()">clear()</button>
     </div>
   </div>
   </div>
@@ -149,136 +150,53 @@
       </div>
       <div class="modal-body">
         <div class="help-section">
-          <h3>BASIC ARITHMETIC:</h3>
+          <h3>JAVASCRIPT WITH EXACT ARITHMETIC</h3>
+          <p>Input is JavaScript. The value of the last expression is shown; RatMath Core values are shown
+            exactly (fraction, repeating decimal, interval). Declarations persist between inputs.</p>
           <ul>
-            <li><code>+, -, *, /</code> - Basic operations</li>
-            <li><code>^</code> - Exponentiation (standard)</li>
-            <li><code>**</code> - Multiplicative exponentiation (interval)</li>
-            <li><code>!</code> - Factorial</li>
-            <li><code>!!</code> - Double factorial</li>
-            <li><code>( )</code> - Parentheses for grouping</li>
+            <li><code>R`1/3 + 1/6`</code> → <code>1/2 = 0.5</code></li>
+            <li><code>R`1:2 + 3`</code> → <code>4:5</code> (intervals)</li>
+            <li><code>let x = R`2/3`</code>, then <code>R`${x}^2`</code> → <code>4/9 = 0.#4</code></li>
+            <li><code>[1, 2, 3, 4].map(n =&gt; R`1/${n}`)</code> → <code>[1, 1/2, 1/3, 1/4]</code></li>
+            <li><code>new Rational(1, 7).toContinuedFractionString()</code> → <code>0.~7</code></li>
+            <li><code>ans</code> is the previous result; click a result to reuse it</li>
           </ul>
         </div>
 
         <div class="help-section">
-          <h3>NUMBERS:</h3>
+          <h3>INSIDE R`…`</h3>
           <ul>
-            <li><code>123</code> - Integers</li>
-            <li><code>3/4</code> - Fractions</li>
-            <li><code>1.25</code> - Decimals</li>
-            <li><code>1..2/3</code> - Mixed numbers (1 and 2/3)</li>
-            <li><code>0.#3</code> - Repeating decimals (0.333...)</li>
-            <li><code>3.~7~15~1</code> - Continued fractions</li>
-            <li><code>1.23[+-0.01]</code> - Decimals with uncertainty</li>
-            <li><code>1.2[3,6]</code> - Decimal concatenation (1.23:1.26)</li>
-            <li><code>12[34,42]</code> - Integer concatenation (1234:1242)</li>
-            <li><code>2:5</code> - Intervals (from 2 to 5)</li>
-            <li><code>1E3, 2.5E-2</code> - Scientific notation</li>
+            <li>Numbers: <code>3</code>, <code>-2</code>, <code>3/4</code>, <code>1..2/3</code> (mixed), <code>0.#3</code> (repeating),
+              <code>1_000</code>, <code>1.23[56:67]</code> and <code>1.2[+-0.1]</code> (uncertainty), <code>1.5?</code> (certified prefix)</li>
+            <li>Operators: <code>+ - * /</code>, <code>^</code> (integer powers), <code>!</code>, <code>:</code> (interval), parentheses</li>
+            <li><code>${value}</code> inserts a Core value, bigint, whole number or literal string without losing exactness</li>
           </ul>
         </div>
 
         <div class="help-section">
-          <h3>EXAMPLES:</h3>
+          <h3>IN SCOPE</h3>
           <ul>
-            <li><code>1/2 + 3/4</code> → <code>5/4 (1.25)</code></li>
-            <li><code>2^3</code> → <code>8</code></li>
-            <li><code>5!</code> → <code>120</code></li>
-            <li><code>1:2 * 3:4</code> → <code>3:8 (interval arithmetic)</code></li>
-            <li><code>0.#3</code> → <code>1/3</code></li>
-            <li><code>3.~7~15~1</code> → <code>355/113</code></li>
-            <li><code>1.5[+-1]</code> → <code>1.49:1.51</code></li>
-            <li><code>1.5[+10,-0.1]</code> → <code>1.499:1.6</code></li>
-            <li><code>1.2[3,6]</code> → <code>1.23:1.26 (decimal concatenation)</code></li>
-            <li><code>12[15,18]</code> → <code>1215:1218 (integer concatenation)</code></li>
+            <li>Core classes and parsers: <code>Integer</code>, <code>Rational</code>, <code>RationalInterval</code>,
+              <code>Fraction</code>, <code>parseNumber</code>, <code>parseInterval</code>, <code>BaseSystem</code>, …</li>
+            <li><code>display("both" | "exact" | "decimal" | "mixed" | "cf")</code>, <code>digits(n)</code></li>
+            <li><code>vars()</code>, <code>clear()</code>, <code>help()</code>, <code>show(value)</code></li>
+            <li>Plain JavaScript numbers such as <code>0.1 + 0.2</code> are inexact and are labelled as such</li>
+            <li>No network access or imports: <code>fetch</code>, <code>import()</code> and similar are unavailable</li>
           </ul>
         </div>
 
         <div class="help-section">
-          <h3>CONCATENATION RULES:</h3>
+          <h3>INTERVAL VISUALIZATION</h3>
           <ul>
-            <li>Valid: <code>12[34,42]</code> → <code>1234:1242</code> (integer parts: 34,42 both 2 digits)</li>
-            <li>Valid: <code>1[19.2,20]</code> → <code>119.2:120</code> (integer parts: 19,20 both 2 digits)</li>
-            <li>Valid: <code>1.2[3,6]</code> → <code>1.23:1.26</code> (decimal base allows any)</li>
-            <li>Invalid: <code>1[9,20]</code> (integer parts: 9=1 digit, 20=2 digits)</li>
-            <li>Invalid: <code>1[9.2,20]</code> (integer parts: 9=1 digit, 20=2 digits)</li>
-            <li>Invalid: <code>1.2[3.4,5.6]</code> (double decimal points)</li>
+            <li>Click 📊 next to an interval result to plot it; drag endpoints, then “Save to Calculator”</li>
+            <li><code>←/→</code> move a selected endpoint by the drag step; export as SVG or HTML</li>
           </ul>
         </div>
 
         <div class="help-section">
-          <h3>VARIABLES & FUNCTIONS:</h3>
+          <h3>KEYBOARD</h3>
           <ul>
-            <li><code>x = 5</code> - Assign value to single-letter variable</li>
-            <li><code>P[x,y] = x^2 - y</code> - Define function with parameters</li>
-            <li><code>P(3,4)</code> - Call function with arguments</li>
-            <li><code>SUM[i](i^2,1,10)</code> - Sum expression from i=1 to 10</li>
-            <li><code>PROD[j](j,1,5)</code> - Product expression from j=1 to 5</li>
-            <li><code>SEQ[k](k^3,0,5,2)</code> - Sequence expression from k=0 to 5 step 2</li>
-            <li><code>VARS</code> - Show defined variables and functions</li>
-          </ul>
-        </div>
-
-        <div class="help-section">
-          <h3>COMMANDS:</h3>
-          <ul>
-            <li><code>DECI</code> - Show results as decimals only</li>
-            <li><code>RAT</code> - Show results as fractions only</li>
-            <li><code>BOTH</code> - Show both decimal and fraction (default)</li>
-            <li><code>SCI</code> - Show results in scientific notation</li>
-            <li><code>CF</code> - Show results as continued fractions</li>
-            <li><code>MIX</code> - Toggle mixed number display (default: on)</li>
-            <li><code>LIMIT &lt;n&gt;</code> - Set decimal display limit to n digits (default: 20)</li>
-            <li><code>LIMIT</code> - Show current decimal display limit</li>
-            <li><code>SCIPREC &lt;n&gt;</code> - Set scientific notation precision to n digits (default: 10)</li>
-            <li><code>SCIPERIOD</code> - Toggle period info display in scientific notation</li>
-            <li><code>CLEAR</code> - Clear calculation history</li>
-          </ul>
-        </div>
-
-        <div class="help-section">
-          <h3>BASE COMMANDS:</h3>
-          <ul>
-            <li><code>BASE</code> - Show current base system</li>
-            <li><code>BASE &lt;n&gt;</code> - Set base to n (2-62, e.g. BASE 16 for hex)</li>
-            <li><code>BASE &lt;sequence&gt;</code> - Set custom base (e.g. BASE 0-9a-f)</li>
-            <li><code>BIN, HEX, OCT</code> - Quick shortcuts for binary, hex, octal</li>
-            <li><code>DEC</code> - Return to decimal (base 10)</li>
-            <li><code>BASES</code> - Show available base systems</li>
-          </ul>
-        </div>
-
-        <div class="help-section">
-          <h3>FORMAT AFTER EXPRESSIONS:</h3>
-          <ul>
-            <li><code>&lt;expr&gt; BASE &lt;n&gt;</code> - Show result in specified base</li>
-            <li><code>&lt;expr&gt; BIN</code> - Show result in binary</li>
-            <li><code>&lt;expr&gt; HEX</code> - Show result in hexadecimal</li>
-            <li><code>&lt;expr&gt; OCT</code> - Show result in octal</li>
-            <li><code>&lt;expr&gt; DECI</code> - Show result in decimal format</li>
-            <li><code>&lt;expr&gt; RAT</code> - Show result in rational format</li>
-            <li><code>&lt;expr&gt; CF</code> - Show result as continued fraction</li>
-            <li><code>&lt;expr&gt; MIX</code> - Show result with mixed numbers toggled</li>
-          </ul>
-        </div>
-
-        <div class="help-section">
-          <h3>VISUALIZATION:</h3>
-          <ul>
-            <li><code>📊</code> - Click visualization icon next to interval results to open interactive viewer</li>
-            <li><code>Tab</code> - Navigate between interval endpoints and whole intervals</li>
-            <li><code>Click</code> - Select interval endpoints or drag whole intervals</li>
-            <li><code>←/→</code> - Move selected elements by current step size</li>
-            <li><code>↑/↓</code> - Adjust drag step size (1/2, 1/3, 1/4, 1/5, 1/8, 1/10, etc.)</li>
-            <li><code>Drag</code> - Move endpoints individually or whole intervals together</li>
-          </ul>
-        </div>
-
-        <div class="help-section">
-          <h3>KEYBOARD SHORTCUTS:</h3>
-          <ul>
-            <li><code>↑/↓</code> - Navigate command history</li>
-            <li><code>Escape</code> - Close help modal</li>
-            <li><code>Enter</code> - Execute calculation</li>
+            <li><code>Enter</code> runs the input; <code>↑/↓</code> step through history; <code>Escape</code> closes dialogs</li>
           </ul>
         </div>
       </div>

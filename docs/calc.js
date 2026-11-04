@@ -1,9 +1,83 @@
+var __defProp = Object.defineProperty;
+var __returnValue = (v) => v;
+function __exportSetter(name, newValue) {
+  this[name] = __returnValue.bind(null, newValue);
+}
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, {
+      get: all[name],
+      enumerable: true,
+      configurable: true,
+      set: __exportSetter.bind(all, name)
+    });
+};
+
+// ../../packages/core/index.js
+var exports_core = {};
+__export(exports_core, {
+  BaseSystem: () => BaseSystem,
+  CertifiedApproximation: () => CertifiedApproximation,
+  Fraction: () => Fraction,
+  FractionInterval: () => FractionInterval,
+  Integer: () => Integer,
+  NUMERAL_LIMITS: () => NUMERAL_LIMITS,
+  NUMERAL_SYSTEM_SCHEMA: () => NUMERAL_SYSTEM_SCHEMA,
+  NumeralSystem: () => NumeralSystem,
+  R: () => R,
+  RANGE_ARITHMETIC_CHECKER_ID: () => RANGE_ARITHMETIC_CHECKER_ID,
+  RANGE_OPERATION_RESULT_SCHEMA: () => RANGE_OPERATION_RESULT_SCHEMA,
+  Rational: () => Rational,
+  RationalInterval: () => RationalInterval,
+  RationalIntervalSet: () => RationalIntervalSet,
+  Relation: () => Relation,
+  TypePromotion: () => TypePromotion,
+  asRationalIntervalSet: () => asRationalIntervalSet,
+  boundedContinuedFractionApproximation: () => boundedContinuedFractionApproximation,
+  boundedDecimalApproximation: () => boundedDecimalApproximation,
+  certifiedContinuedFractionPrefix: () => certifiedContinuedFractionPrefix,
+  certifiedRadixPrefix: () => certifiedRadixPrefix,
+  checkRangeOperationResult: () => checkRangeOperationResult,
+  default: () => core_default,
+  isBaseSystem: () => isBaseSystem,
+  isCertifiedApproximation: () => isCertifiedApproximation,
+  isCoreNumber: () => isCoreNumber,
+  isFraction: () => isFraction,
+  isFractionInterval: () => isFractionInterval,
+  isInteger: () => isInteger,
+  isRational: () => isRational,
+  isRationalInterval: () => isRationalInterval,
+  isRationalIntervalSet: () => isRationalIntervalSet,
+  normalizeCertifiedApproximation: () => normalizeCertifiedApproximation,
+  parseCertifiedApproximation: () => parseApproximation,
+  parseContinuedFraction: () => parseContinuedFraction,
+  parseDecimal: () => parseDecimal,
+  parseInterval: () => parseInterval,
+  parseMixedNumber: () => parseMixedNumber,
+  parseNumber: () => parseNumber,
+  parseRational: () => parseRational,
+  parseRepeatingDecimal: () => parseRepeatingDecimal,
+  possibleRelations: () => possibleRelations,
+  rangeAbsoluteValue: () => rangeAbsoluteValue,
+  rangeAdd: () => rangeAdd,
+  rangeDivide: () => rangeDivide,
+  rangeIntegerPower: () => rangeIntegerPower,
+  rangeMultiply: () => rangeMultiply,
+  rangeNegate: () => rangeNegate,
+  rangeReciprocal: () => rangeReciprocal,
+  rangeSubtract: () => rangeSubtract,
+  reviveCoreValue: () => reviveCoreValue
+});
+
 // ../../packages/core/src/base-system.js
 class BaseSystem {
   #base;
+  #radix;
+  #digitOffset;
   #characters;
   #charMap;
   #name;
+  #allowReserved;
   static #prefixMap = new Map;
   static RESERVED_SYMBOLS = new Set([
     "+",
@@ -21,9 +95,15 @@ class BaseSystem {
     "#",
     "~"
   ]);
-  constructor(characters, name) {
+  constructor(characters, name, options = {}) {
+    if (options === null || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError("Base system options must be an object");
+    }
+    if (options.allowReserved !== undefined && typeof options.allowReserved !== "boolean") {
+      throw new TypeError("allowReserved must be a boolean");
+    }
     if (typeof characters === "string") {
-      this.#characters = characters.split("");
+      this.#characters = [...characters];
     } else if (Array.isArray(characters)) {
       this.#characters = [...characters];
     } else {
@@ -32,7 +112,13 @@ class BaseSystem {
     if (this.#characters.length < 2) {
       throw new Error("Base system must have at least 2 characters");
     }
+    if (this.#characters.some((character) => typeof character !== "string" || [...character].length !== 1)) {
+      throw new Error("Each base system character must be a single Unicode character");
+    }
     this.#base = this.#characters.length;
+    this.#radix = options.radix ?? this.#base;
+    this.#digitOffset = options.digitOffset ?? 0;
+    this.#allowReserved = options.allowReserved === true;
     this.#charMap = this.#createCharacterMap();
     this.#name = name || `Base ${this.#base}`;
     this.#validateBase();
@@ -40,6 +126,21 @@ class BaseSystem {
   }
   get base() {
     return this.#base;
+  }
+  get radix() {
+    return this.#radix;
+  }
+  get digitOffset() {
+    return this.#digitOffset;
+  }
+  get supportsPositionalFractions() {
+    return this.#radix === this.#base && this.#digitOffset === 0;
+  }
+  get requiresQuoting() {
+    return this.#characters.some((character) => BaseSystem.RESERVED_SYMBOLS.has(character));
+  }
+  get allowsReservedDigits() {
+    return this.#allowReserved;
   }
   get characters() {
     return [...this.#characters];
@@ -49,10 +150,10 @@ class BaseSystem {
   }
   getChar(value) {
     const i = Number(value);
-    if (i < 0 || i >= this.#characters.length) {
-      throw new Error(`Value ${value} is out of range for base ${this.#base}`);
+    if (!Number.isSafeInteger(i) || i < this.#digitOffset || i >= this.#digitOffset + this.#characters.length) {
+      throw new Error(`Value ${value} must be an in-range integer for base ${this.#base}`);
     }
-    return this.#characters[i];
+    return this.#characters[i - this.#digitOffset];
   }
   get name() {
     return this.#name;
@@ -60,17 +161,19 @@ class BaseSystem {
   #createCharacterMap() {
     const map = new Map;
     for (let i = 0;i < this.#characters.length; i++) {
-      map.set(this.#characters[i], i);
+      map.set(this.#characters[i], i + this.#digitOffset);
     }
     return map;
   }
   #validateBase() {
-    if (this.#base < 2) {
-      throw new Error("Base must be at least 2");
+    if (!Number.isSafeInteger(this.#radix) || Math.abs(this.#radix) < 2) {
+      throw new Error("Radix must be a safe integer with absolute value at least 2");
     }
-    if (this.#base !== this.#characters.length) {
-      throw new Error(`Base ${this.#base} does not match character set length ${this.#characters.length}`);
+    if (Math.abs(this.#radix) !== this.#characters.length) {
+      throw new Error(`Radix ${this.#radix} does not match character set length ${this.#characters.length}`);
     }
+    if (!Number.isSafeInteger(this.#digitOffset))
+      throw new Error("Digit offset must be a safe integer");
     const uniqueChars = new Set(this.#characters);
     if (uniqueChars.size !== this.#characters.length) {
       throw new Error("Character set contains duplicate characters");
@@ -113,6 +216,8 @@ class BaseSystem {
     }
   }
   #checkForConflicts() {
+    if (this.#allowReserved)
+      return;
     const conflicts = [];
     for (const char of this.#characters) {
       if (BaseSystem.RESERVED_SYMBOLS.has(char)) {
@@ -132,10 +237,12 @@ class BaseSystem {
       negative = true;
       str = str.slice(1);
     }
+    if (str.length === 0) {
+      throw new Error("A minus sign must be followed by at least one digit");
+    }
     let result = 0n;
-    const baseBigInt = BigInt(this.#base);
-    for (let i = 0;i < str.length; i++) {
-      const char = str[i];
+    const baseBigInt = BigInt(this.#radix);
+    for (const char of str) {
       if (!this.#charMap.has(char)) {
         throw new Error(`Invalid character '${char}' for ${this.#name} (base ${this.#base})`);
       }
@@ -149,22 +256,34 @@ class BaseSystem {
       throw new Error("Value must be a BigInt");
     }
     if (value === 0n) {
-      return this.#characters[0];
+      const zero = this.#characters.find((character) => this.#charMap.get(character) === 0);
+      if (zero !== undefined)
+        return zero;
+      throw new Error(`${this.#name} has no representation for zero`);
     }
-    let negative = false;
-    if (value < 0n) {
-      negative = true;
-      value = -value;
+    if (value < 0n && this.#radix > 0 && this.#digitOffset === 0) {
+      return `-${this.fromDecimal(-value)}`;
     }
-    const baseBigInt = BigInt(this.#base);
+    if (value < 0n && this.#radix > 0 && this.#digitOffset > 0) {
+      return `-${this.fromDecimal(-value)}`;
+    }
+    const radix = BigInt(this.#radix);
+    const modulus = BigInt(Math.abs(this.#radix));
+    const digitValues = this.#characters.map((character) => BigInt(this.#charMap.get(character)));
     const digits = [];
-    while (value > 0n) {
-      const remainder = Number(value % baseBigInt);
-      digits.unshift(this.#characters[remainder]);
-      value = value / baseBigInt;
+    let steps = 0;
+    while (value !== 0n) {
+      const residue = (value % modulus + modulus) % modulus;
+      const index = digitValues.findIndex((digit) => (digit % modulus + modulus) % modulus === residue);
+      if (index < 0)
+        throw new Error(`No digit in ${this.#name} can encode residue ${residue}`);
+      const digit = digitValues[index];
+      digits.unshift(this.#characters[index]);
+      value = (value - digit) / radix;
+      if (++steps > 1e5)
+        throw new Error(`${this.#name} conversion did not converge`);
     }
-    const result = digits.join("");
-    return negative ? "-" + result : result;
+    return digits.join("");
   }
   isValidString(str) {
     if (typeof str !== "string") {
@@ -197,7 +316,7 @@ class BaseSystem {
     if (!(other instanceof BaseSystem)) {
       return false;
     }
-    if (this.#base !== other.#base) {
+    if (this.#base !== other.#base || this.#radix !== other.#radix || this.#digitOffset !== other.#digitOffset) {
       return false;
     }
     for (let i = 0;i < this.#characters.length; i++) {
@@ -286,6 +405,9 @@ class BaseSystem {
   static unregisterPrefix(prefix) {
     BaseSystem.#prefixMap.delete(prefix);
   }
+  static hasExactPrefix(prefix) {
+    return BaseSystem.#prefixMap.has(prefix);
+  }
   static getSystemForPrefix(prefix) {
     if (prefix === "D")
       return null;
@@ -315,33 +437,339 @@ class BaseSystem {
     if (caseSensitive === false) {
       const lowerChars = this.#characters.map((char) => char.toLowerCase());
       const uniqueLowerChars = [...new Set(lowerChars)];
-      if (uniqueLowerChars.length !== lowerChars.length) {
+      const collapsed = uniqueLowerChars.length !== lowerChars.length;
+      if (collapsed) {
         console.warn("Case-insensitive conversion resulted in duplicate characters");
       }
-      return new BaseSystem(uniqueLowerChars.join(""), `${this.#name} (case-insensitive)`);
+      return new BaseSystem(uniqueLowerChars.join(""), `${this.#name} (case-insensitive)`, collapsed ? { allowReserved: this.#allowReserved } : {
+        radix: this.#radix,
+        digitOffset: this.#digitOffset,
+        allowReserved: this.#allowReserved
+      });
     }
     throw new Error("caseSensitive must be a boolean value");
   }
+  toJSON() {
+    return {
+      $ratmath: "BaseSystem",
+      characters: this.#characters,
+      name: this.#name,
+      radix: this.#radix,
+      digitOffset: this.#digitOffset,
+      allowReserved: this.#allowReserved
+    };
+  }
 }
 BaseSystem.BINARY = new BaseSystem(["0", "1"], "Binary");
+BaseSystem.TERNARY = new BaseSystem(["0", "1", "2"], "Ternary");
+BaseSystem.QUATERNARY = new BaseSystem(["0", "1", "2", "3"], "Quaternary");
+BaseSystem.QUINARY = new BaseSystem(["0", "1", "2", "3", "4"], "Quinary (Base 5)");
+BaseSystem.SEPTENARY = new BaseSystem(["0", "1", "2", "3", "4", "5", "6"], "Septenary (Base 7)");
 BaseSystem.OCTAL = new BaseSystem(["0", "1", "2", "3", "4", "5", "6", "7"], "Octal");
 BaseSystem.DECIMAL = new BaseSystem(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"], "Decimal");
+BaseSystem.DUODECIMAL = new BaseSystem(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b"], "Duodecimal (Clock/Base 12)");
 BaseSystem.HEXADECIMAL = new BaseSystem(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"], "Hexadecimal");
-BaseSystem.BASE36 = new BaseSystem("0123456789abcdefghijklmnopqrstuvwxyz".split(""), "Base 36");
+BaseSystem.VIGESIMAL = new BaseSystem("0123456789abcdefghij".split(""), "Vigesimal (Base 20)");
+BaseSystem.BASE36 = new BaseSystem("0123456789abcdefghijklmnopqrstuvwxyz".split(""), "Base 36 (URL)");
 BaseSystem.BASE62 = new BaseSystem("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".split(""), "Base 62");
-BaseSystem.BASE60 = new BaseSystem("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWX".split(""), "Base 60 (Sexagesimal)");
+BaseSystem.BASE64 = new BaseSystem("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ@&".split(""), "Base 64");
+BaseSystem.BASE60 = new BaseSystem("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWX".split(""), "Base 60 (Mesopotamia)");
 BaseSystem.ROMAN = new BaseSystem(["I", "V", "X", "L", "C", "D", "M"], "Roman Numerals");
-BaseSystem.registerPrefix("x", BaseSystem.HEXADECIMAL);
 BaseSystem.registerPrefix("b", BaseSystem.BINARY);
+BaseSystem.registerPrefix("t", BaseSystem.TERNARY);
+BaseSystem.registerPrefix("q", BaseSystem.QUATERNARY);
+BaseSystem.registerPrefix("f", BaseSystem.QUINARY);
+BaseSystem.registerPrefix("s", BaseSystem.SEPTENARY);
 BaseSystem.registerPrefix("o", BaseSystem.OCTAL);
-BaseSystem.registerPrefix("d", BaseSystem.DECIMAL);
+BaseSystem.registerPrefix("d", BaseSystem.DUODECIMAL);
+BaseSystem.registerPrefix("x", BaseSystem.HEXADECIMAL);
+BaseSystem.registerPrefix("v", BaseSystem.VIGESIMAL);
+BaseSystem.registerPrefix("u", BaseSystem.BASE36);
+BaseSystem.registerPrefix("m", BaseSystem.BASE60);
+BaseSystem.registerPrefix("y", BaseSystem.BASE64);
+
+// ../../packages/core/src/rational-literal.js
+var DIGITS = String.raw`\d(?:_?\d)*`;
+var MAX_EXPANDED_DIGITS = 1e5;
+function inputString(input, label = "number") {
+  if (typeof input !== "string") {
+    throw new TypeError(`${label} must be a string`);
+  }
+  const value = input.trim();
+  if (value.length === 0) {
+    throw new Error(`${label} cannot be empty`);
+  }
+  return value;
+}
+function cleanDigits(value, { signed = false } = {}) {
+  const pattern = signed ? new RegExp(`^[+-]?${DIGITS}$`) : new RegExp(`^${DIGITS}$`);
+  if (!pattern.test(value)) {
+    throw new Error(`Invalid decimal digits: ${value}`);
+  }
+  return value.replaceAll("_", "");
+}
+function validateUnderscores(value) {
+  for (let index = 0;index < value.length; index++) {
+    if (value[index] !== "_")
+      continue;
+    if (!/\d/.test(value[index - 1] ?? "") || !/\d/.test(value[index + 1] ?? "")) {
+      throw new Error("Underscore separators must be between decimal digits");
+    }
+  }
+}
+function expandDigitRuns(value) {
+  let expandedLength = 0;
+  const expanded = value.replace(/\{(\d+)~(\d+)\}/g, (_match, digits, countText) => {
+    const count = Number(countText);
+    if (!Number.isSafeInteger(count) || count < 0) {
+      throw new Error(`Invalid repeated-digit count: ${countText}`);
+    }
+    expandedLength += digits.length * count;
+    if (expandedLength > MAX_EXPANDED_DIGITS) {
+      throw new Error(`Expanded decimal exceeds ${MAX_EXPANDED_DIGITS} digits`);
+    }
+    return digits.repeat(count);
+  });
+  if (/[{}]/.test(expanded)) {
+    throw new Error(`Invalid repeated-digit notation: ${value}`);
+  }
+  if (expanded.length > MAX_EXPANDED_DIGITS) {
+    throw new Error(`Decimal exceeds ${MAX_EXPANDED_DIGITS} digits`);
+  }
+  return expanded;
+}
+function parseDecimalParts(input) {
+  let value = inputString(input, "decimal");
+  validateUnderscores(value);
+  let sign = 1n;
+  if (value.startsWith("+") || value.startsWith("-")) {
+    sign = value[0] === "-" ? -1n : 1n;
+    value = value.slice(1);
+  }
+  const hashParts = value.split("#");
+  if (hashParts.length > 2) {
+    throw new Error("A repeating decimal can contain only one '#'");
+  }
+  let prefix = expandDigitRuns(hashParts[0].replaceAll("_", ""));
+  const repeating = hashParts.length === 2 ? expandDigitRuns(hashParts[1].replaceAll("_", "")) : null;
+  if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(prefix)) {
+    throw new Error(`Invalid decimal format: ${input}`);
+  }
+  const dot = prefix.indexOf(".");
+  const integerDigits = dot === -1 ? prefix : prefix.slice(0, dot) || "0";
+  const fractionalDigits = dot === -1 ? "" : prefix.slice(dot + 1);
+  const integer = BigInt(integerDigits);
+  const fractional = fractionalDigits.length === 0 ? 0n : BigInt(fractionalDigits);
+  const fractionalScale = 10n ** BigInt(fractionalDigits.length);
+  let numerator = integer * fractionalScale + fractional;
+  let denominator = fractionalScale;
+  if (repeating !== null) {
+    if (!/^\d+$/.test(repeating)) {
+      throw new Error("The repeating part must contain one or more digits");
+    }
+    if (!/^0+$/.test(repeating)) {
+      const repeatScale = 10n ** BigInt(repeating.length) - 1n;
+      numerator = numerator * repeatScale + BigInt(repeating);
+      denominator *= repeatScale;
+    }
+  }
+  return [sign * numerator, denominator];
+}
+function parseRationalParts(input) {
+  let value = inputString(input, "rational");
+  if (value.startsWith("~")) {
+    value = value.slice(1);
+  }
+  const continued = value.match(new RegExp(`^([+-]?${DIGITS})\\.~(${DIGITS}(?:~${DIGITS})*)$`));
+  if (continued) {
+    const first = BigInt(cleanDigits(continued[1], { signed: true }));
+    const tail = continued[2].split("~").map((term) => BigInt(cleanDigits(term)));
+    if (tail.length === 1 && tail[0] === 0n) {
+      return [first, 1n];
+    }
+    return continuedFractionParts([first, ...tail]);
+  }
+  const mixed = value.match(new RegExp(`^([+-]?)(${DIGITS})\\.\\.(${DIGITS})\\/(${DIGITS})$`));
+  if (mixed) {
+    const sign = mixed[1] === "-" ? -1n : 1n;
+    const whole = BigInt(cleanDigits(mixed[2]));
+    const numerator = BigInt(cleanDigits(mixed[3]));
+    const denominator = BigInt(cleanDigits(mixed[4]));
+    if (denominator === 0n) {
+      throw new Error("Denominator cannot be zero");
+    }
+    return [sign * (whole * denominator + numerator), denominator];
+  }
+  if (value.includes("..")) {
+    throw new Error("Invalid mixed number format. Use 'a..b/c'");
+  }
+  const fraction = value.match(new RegExp(`^([+-]?${DIGITS})\\/(${DIGITS})$`));
+  if (fraction) {
+    const denominator = BigInt(cleanDigits(fraction[2]));
+    if (denominator === 0n) {
+      throw new Error("Denominator cannot be zero");
+    }
+    return [BigInt(cleanDigits(fraction[1], { signed: true })), denominator];
+  }
+  if (value.includes("#") || value.includes(".")) {
+    return parseDecimalParts(value);
+  }
+  if (new RegExp(`^[+-]?${DIGITS}$`).test(value)) {
+    return [BigInt(cleanDigits(value, { signed: true })), 1n];
+  }
+  throw new Error(`Invalid rational number: ${input}`);
+}
+function continuedFractionParts(terms) {
+  for (const term of terms.slice(1)) {
+    if (term <= 0n) {
+      throw new Error(`Continued fraction terms must be positive: ${term}`);
+    }
+  }
+  let [pPrev, p, qPrev, q] = [1n, terms[0], 0n, 1n];
+  for (const a of terms.slice(1)) {
+    [pPrev, p] = [p, a * p + pPrev];
+    [qPrev, q] = [q, a * q + qPrev];
+  }
+  return [p, q];
+}
+
+// ../../packages/core/src/bigint.js
+function toExactBigInt(value, label = "Value") {
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) {
+      throw new RangeError(`${label} must be a safe integer; use a string or bigint for exact values`);
+    }
+    return BigInt(value);
+  }
+  if (typeof value === "bigint") {
+    return value;
+  }
+  if (typeof value === "string" && /^[+-]?\d+$/.test(value.trim())) {
+    return BigInt(value.trim());
+  }
+  throw new TypeError(`${label} must be an integer number, string, or bigint`);
+}
+
+// ../../packages/core/src/reduced-arithmetic.js
+function gcd(a, b) {
+  if (a < 0n)
+    a = -a;
+  if (b < 0n)
+    b = -b;
+  while (b !== 0n)
+    [a, b] = [b, a % b];
+  return a;
+}
+function reducedSum(a, b, c, d) {
+  if (d === 1n)
+    return [a + c * b, b];
+  if (b === 1n)
+    return [a * d + c, d];
+  if (b === d) {
+    const n = a + c;
+    const g = gcd(n, b);
+    return n === 0n ? [0n, 1n] : [n / g, b / g];
+  }
+  const g = gcd(b, d);
+  if (g === 1n)
+    return [a * d + c * b, b * d];
+  const bb = b / g;
+  const n = a * (d / g) + c * bb;
+  const h = gcd(n, g);
+  return n === 0n ? [0n, 1n] : [n / h, bb * (d / h)];
+}
+function reducedProduct(a, b, c, d) {
+  if (a === 0n || c === 0n)
+    return [0n, 1n];
+  const g = gcd(a, d);
+  const h = gcd(c, b);
+  return [a / g * (c / h), b / h * (d / g)];
+}
+function reducedQuotient(a, b, c, d) {
+  if (a === 0n)
+    return [0n, 1n];
+  const g = gcd(a, c);
+  const h = gcd(b, d);
+  const n = a / g * (d / h);
+  const den = b / h * (c / g);
+  return den < 0n ? [-n, -den] : [n, den];
+}
 
 // ../../packages/core/src/rational.js
+var POWERS_OF_5 = Object.freeze({
+  16: 5n ** 16n,
+  8: 5n ** 8n,
+  4: 5n ** 4n,
+  2: 5n ** 2n,
+  1: 5n
+});
 var bitLength = function(int) {
   if (int === 0n)
     return 0;
   return int < 0n ? (-int).toString(2).length : int.toString(2).length;
 };
+var roundedQuotient = function(numerator, denominator, mode) {
+  const quotient = numerator / denominator;
+  const remainder = numerator % denominator;
+  if (remainder === 0n || mode === "toward-zero")
+    return quotient;
+  if (mode === "floor")
+    return numerator < 0n ? quotient - 1n : quotient;
+  if (mode === "ceil")
+    return numerator > 0n ? quotient + 1n : quotient;
+  const twiceRemainder = (remainder < 0n ? -remainder : remainder) * 2n;
+  if (twiceRemainder < denominator)
+    return quotient;
+  const direction = numerator < 0n ? -1n : 1n;
+  if (twiceRemainder > denominator || mode === "half-up") {
+    return quotient + direction;
+  }
+  return quotient % 2n === 0n ? quotient : quotient + direction;
+};
+var continuedFractionOptions = function(options, defaultLimit) {
+  if (options === undefined) {
+    return { maxTerms: defaultLimit, long: false };
+  }
+  if (typeof options === "number") {
+    return { maxTerms: options, long: false };
+  }
+  if (options === null || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("Continued-fraction options must be a number or an object");
+  }
+  const maxTerms = options.maxTerms ?? defaultLimit;
+  const long = options.long ?? false;
+  if (typeof long !== "boolean") {
+    throw new TypeError("Continued-fraction long option must be a boolean");
+  }
+  return { maxTerms, long };
+};
+var convergentOptions = function(options, defaultLimit) {
+  if (options === undefined) {
+    return { maxCount: defaultLimit, long: false, intermediates: false };
+  }
+  if (typeof options === "number") {
+    return { maxCount: options, long: false, intermediates: false };
+  }
+  if (options === null || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("Convergent options must be a number or an object");
+  }
+  const maxCount = options.maxCount ?? defaultLimit;
+  const long = options.long ?? false;
+  const intermediates = options.intermediates ?? false;
+  if (typeof long !== "boolean") {
+    throw new TypeError("Convergent long option must be a boolean");
+  }
+  if (typeof intermediates !== "boolean") {
+    throw new TypeError("Convergent intermediates option must be a boolean");
+  }
+  return { maxCount, long, intermediates };
+};
+function exactParts(other) {
+  if (typeof other?.value === "bigint" && other.denominator === undefined) {
+    return [other.value, 1n];
+  }
+  return [other.numerator, other.denominator];
+}
 
 class Rational {
   #numerator;
@@ -360,25 +788,28 @@ class Rational {
   #initialSegmentRest;
   #periodDigitsRest;
   #maxPeriodDigitsComputed;
-  static DEFAULT_PERIOD_DIGITS = 20;
-  static MAX_PERIOD_DIGITS = 1000;
+  #maxPeriodCheckComputed;
+  static MAX_PERIOD_DIGITS = 30;
   static MAX_PERIOD_CHECK = 1e7;
-  static POWERS_OF_5 = {
-    16: 5n ** 16n,
-    8: 5n ** 8n,
-    4: 5n ** 4n,
-    2: 5n ** 2n,
-    1: 5n
-  };
+  static DEFAULT_DECIMAL_DIGITS = 20;
+  static DEFAULT_SCIENTIFIC_PRECISION = 11;
+  static DEFAULT_BASE_LIMIT = 1000;
+  static DEFAULT_PERIOD_MODULO_LIMIT = 1e6;
   static zero = new Rational(0, 1);
   static one = new Rational(1, 1);
   constructor(numerator, denominator = 1n) {
+    if (numerator instanceof Rational) {
+      this.#numerator = numerator.numerator;
+      this.#denominator = numerator.denominator;
+      this.#isNegative = this.#numerator < 0n;
+      return;
+    }
     if (numerator && typeof numerator === "object" && numerator.constructor.name === "Integer") {
       this.#numerator = numerator.value;
       if (denominator && typeof denominator === "object" && denominator.constructor.name === "Integer") {
         this.#denominator = denominator.value;
       } else if (denominator !== undefined) {
-        this.#denominator = BigInt(denominator);
+        this.#denominator = toExactBigInt(denominator, "Rational denominator");
       } else {
         this.#denominator = 1n;
       }
@@ -390,62 +821,42 @@ class Rational {
       return;
     }
     if (typeof numerator === "string") {
-      if (numerator.includes("..")) {
-        const mixedParts = numerator.trim().split("..");
-        if (mixedParts.length !== 2) {
-          throw new Error("Invalid mixed number format. Use 'a..b/c'");
-        }
-        const wholePart = BigInt(mixedParts[0]);
-        const fractionParts = mixedParts[1].split("/");
-        if (fractionParts.length !== 2) {
-          throw new Error("Invalid fraction in mixed number. Use 'a..b/c'");
-        }
-        const fracNumerator = BigInt(fractionParts[0]);
-        const fracDenominator = BigInt(fractionParts[1]);
-        const isNegative = wholePart < 0n;
-        const absWhole = isNegative ? -wholePart : wholePart;
-        this.#numerator = isNegative ? -(absWhole * fracDenominator + fracNumerator) : wholePart * fracDenominator + fracNumerator;
-        this.#denominator = fracDenominator;
-      } else {
-        if (numerator.includes(".")) {
-          const expandedNumerator = Rational.#parseRepeatedDigits(numerator);
-          const decimalParts = expandedNumerator.trim().split(".");
-          if (decimalParts.length === 2) {
-            const integerPart = decimalParts[0] || "0";
-            const fractionalPart = decimalParts[1];
-            if (!/^-?\d*$/.test(integerPart) || !/^\d*$/.test(fractionalPart)) {
-              throw new Error("Invalid decimal format");
-            }
-            const wholePart = BigInt(integerPart);
-            const fractionalValue = BigInt(fractionalPart);
-            const denomValue = 10n ** BigInt(fractionalPart.length);
-            this.#numerator = wholePart * denomValue + (wholePart < 0n ? -fractionalValue : fractionalValue);
-            this.#denominator = denomValue;
-          } else {
-            throw new Error("Invalid decimal format - multiple decimal points");
-          }
-        } else {
-          const parts = numerator.trim().split("/");
-          if (parts.length === 1) {
-            this.#numerator = BigInt(parts[0]);
-            this.#denominator = BigInt(denominator);
-          } else if (parts.length === 2) {
-            this.#numerator = BigInt(parts[0]);
-            this.#denominator = BigInt(parts[1]);
-          } else {
-            throw new Error("Invalid rational format. Use 'a/b', 'a', or 'a..b/c'");
-          }
-        }
+      const [parsedNumerator, parsedDenominator] = parseRationalParts(numerator);
+      let divisor = 1n;
+      if (arguments.length > 1) {
+        divisor = denominator && typeof denominator === "object" && denominator.constructor.name === "Integer" ? denominator.value : toExactBigInt(denominator, "Rational denominator");
       }
+      this.#numerator = parsedNumerator;
+      this.#denominator = parsedDenominator * divisor;
     } else {
-      this.#numerator = BigInt(numerator);
-      this.#denominator = BigInt(denominator);
+      this.#numerator = toExactBigInt(numerator, "Rational numerator");
+      this.#denominator = toExactBigInt(denominator, "Rational denominator");
     }
     if (this.#denominator === 0n) {
       throw new Error("Denominator cannot be zero");
     }
     this.#normalize();
     this.#isNegative = this.#numerator < 0n;
+  }
+  static #fromCanonical(numerator, denominator) {
+    const result = new Rational(0n, 1n);
+    result.#numerator = numerator;
+    result.#denominator = denominator;
+    result.#isNegative = numerator < 0n;
+    return result;
+  }
+  static #canonicalParts(other) {
+    if (other == null || typeof other !== "object")
+      return null;
+    const prototype = Object.getPrototypeOf(other);
+    if (prototype === Rational.prototype) {
+      return Object.hasOwn(other, "numerator") || Object.hasOwn(other, "denominator") ? null : [other.#numerator, other.#denominator];
+    }
+    if (prototype?.constructor?.name === "Integer" && !Object.hasOwn(other, "value")) {
+      const value = other.value;
+      return typeof value === "bigint" ? [value, 1n] : null;
+    }
+    return null;
   }
   #normalize() {
     if (this.#denominator < 0n) {
@@ -475,6 +886,13 @@ class Rational {
     return this.#denominator;
   }
   add(other) {
+    const parts = Rational.#canonicalParts(other);
+    if (parts) {
+      return Rational.#fromCanonical(...reducedSum(this.#numerator, this.#denominator, parts[0], parts[1]));
+    }
+    if (other?.isCertifiedApproximation === true) {
+      return other._operateExactLeft("add", this);
+    }
     if (other.constructor.name === "Integer") {
       const otherAsRational = new Rational(other.value, 1n);
       return this.add(otherAsRational);
@@ -496,6 +914,13 @@ class Rational {
     }
   }
   subtract(other) {
+    const parts = Rational.#canonicalParts(other);
+    if (parts) {
+      return Rational.#fromCanonical(...reducedSum(this.#numerator, this.#denominator, -parts[0], parts[1]));
+    }
+    if (other?.isCertifiedApproximation === true) {
+      return other._operateExactLeft("subtract", this);
+    }
     if (other.constructor.name === "Integer") {
       const otherAsRational = new Rational(other.value, 1n);
       return this.subtract(otherAsRational);
@@ -516,6 +941,13 @@ class Rational {
     }
   }
   multiply(other) {
+    const parts = Rational.#canonicalParts(other);
+    if (parts) {
+      return Rational.#fromCanonical(...reducedProduct(this.#numerator, this.#denominator, parts[0], parts[1]));
+    }
+    if (other?.isCertifiedApproximation === true) {
+      return other._operateExactLeft("multiply", this);
+    }
     if (other.constructor.name === "Integer") {
       const otherAsRational = new Rational(other.value, 1n);
       return this.multiply(otherAsRational);
@@ -536,6 +968,15 @@ class Rational {
     }
   }
   divide(other) {
+    const parts = Rational.#canonicalParts(other);
+    if (parts) {
+      if (parts[0] === 0n)
+        throw new Error("Division by zero");
+      return Rational.#fromCanonical(...reducedQuotient(this.#numerator, this.#denominator, parts[0], parts[1]));
+    }
+    if (other?.isCertifiedApproximation === true) {
+      return other._operateExactLeft("divide", this);
+    }
     if (other.constructor.name === "Integer") {
       if (other.value === 0n) {
         throw new Error("Division by zero");
@@ -561,6 +1002,25 @@ class Rational {
       throw new Error(`Cannot divide Rational by ${other.constructor.name}`);
     }
   }
+  possibleRelationsTo(other) {
+    if (other?.isCertifiedApproximation === true)
+      other = other.enclosure;
+    if (other?.constructor?.name === "Integer")
+      other = new Rational(other.value, 1n);
+    if (other instanceof Rational)
+      return this.lessThan(other) ? 1 : this.greaterThan(other) ? 4 : 2;
+    if (other?.low && other?.high) {
+      let mask = 0;
+      if (this.lessThan(other.high))
+        mask |= 1;
+      if (other.low.lessThanOrEqual(this) && this.lessThanOrEqual(other.high))
+        mask |= 2;
+      if (this.greaterThan(other.low))
+        mask |= 4;
+      return mask;
+    }
+    throw new TypeError("Possible relations require a Core numeric value");
+  }
   negate() {
     return new Rational(-this.#numerator, this.#denominator);
   }
@@ -571,7 +1031,7 @@ class Rational {
     return new Rational(this.#denominator, this.#numerator);
   }
   pow(exponent) {
-    const n = BigInt(exponent);
+    const n = toExactBigInt(exponent, "Exponent");
     if (n === 0n) {
       if (this.#numerator === 0n) {
         throw new Error("Zero cannot be raised to the power of zero");
@@ -585,26 +1045,16 @@ class Rational {
       const reciprocal = this.reciprocal();
       return reciprocal.pow(-n);
     }
-    let resultNum = 1n;
-    let resultDen = 1n;
-    let num = this.#numerator;
-    let den = this.#denominator;
-    for (let i = n < 0n ? -n : n;i > 0n; i >>= 1n) {
-      if (i & 1n) {
-        resultNum *= num;
-        resultDen *= den;
-      }
-      num *= num;
-      den *= den;
-    }
-    return new Rational(resultNum, resultDen);
+    return new Rational(this.#numerator ** n, this.#denominator ** n);
   }
   equals(other) {
-    return this.#numerator === other.numerator && this.#denominator === other.denominator;
+    const [numerator, denominator] = exactParts(other);
+    return this.#numerator === numerator && this.#denominator === denominator;
   }
   compareTo(other) {
-    const crossProduct1 = this.#numerator * other.denominator;
-    const crossProduct2 = this.#denominator * other.numerator;
+    const [numerator, denominator] = exactParts(other);
+    const crossProduct1 = this.#numerator * denominator;
+    const crossProduct2 = this.#denominator * numerator;
     if (crossProduct1 < crossProduct2)
       return -1;
     if (crossProduct1 > crossProduct2)
@@ -626,7 +1076,42 @@ class Rational {
   abs() {
     return this.#numerator < 0n ? this.negate() : new Rational(this.#numerator, this.#denominator);
   }
-  toString(base) {
+  floor() {
+    return roundedQuotient(this.#numerator, this.#denominator, "floor");
+  }
+  ceil() {
+    return roundedQuotient(this.#numerator, this.#denominator, "ceil");
+  }
+  trunc() {
+    return roundedQuotient(this.#numerator, this.#denominator, "toward-zero");
+  }
+  round(mode = "half-even") {
+    if (!new Set(["half-even", "half-up", "toward-zero", "floor", "ceil"]).has(mode)) {
+      throw new TypeError("Unknown rounding mode");
+    }
+    return roundedQuotient(this.#numerator, this.#denominator, mode);
+  }
+  roundTo(places, mode = "half-even") {
+    if (!Number.isSafeInteger(places)) {
+      throw new RangeError("Decimal places must be a safe integer");
+    }
+    if (!new Set(["half-even", "half-up", "toward-zero", "floor", "ceil"]).has(mode)) {
+      throw new TypeError("Unknown rounding mode");
+    }
+    const scale = 10n ** BigInt(Math.abs(places));
+    if (places >= 0) {
+      return new Rational(roundedQuotient(this.#numerator * scale, this.#denominator, mode), scale);
+    }
+    return new Rational(roundedQuotient(this.#numerator, this.#denominator * scale, mode) * scale);
+  }
+  toJSON() {
+    return {
+      $ratmath: "Rational",
+      numerator: this.#numerator.toString(),
+      denominator: this.#denominator.toString()
+    };
+  }
+  toString(base, options) {
     if (base === undefined) {
       if (this.#denominator === 1n) {
         return this.#numerator.toString();
@@ -641,22 +1126,44 @@ class Rational {
     } else {
       return this.toString();
     }
-    return this.toRepeatingBase(baseSystem);
+    return this.toRepeatingBase(baseSystem, options);
   }
-  toRepeatingBase(baseSystem) {
-    return this.toRepeatingBaseWithPeriod(baseSystem).baseStr;
+  toRepeatingBase(baseSystem, options) {
+    return this.toRepeatingBaseWithPeriod(baseSystem, options).baseStr;
   }
   toRepeatingBaseWithPeriod(baseSystem, options = {}) {
     if (!(baseSystem instanceof BaseSystem)) {
       throw new Error("Argument must be a BaseSystem");
     }
-    const { useRepeatNotation = true, limit = 1000 } = options;
+    if (options === null || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError("Base-expansion options must be an object");
+    }
+    const {
+      useRepeatNotation = true,
+      limit = Rational.DEFAULT_BASE_LIMIT
+    } = options;
+    if (typeof useRepeatNotation !== "boolean") {
+      throw new TypeError("Base-expansion useRepeatNotation option must be a boolean");
+    }
+    if (!Number.isSafeInteger(limit) || limit < 1) {
+      throw new RangeError("Base-expansion limit must be a positive safe integer");
+    }
+    if (!baseSystem.supportsPositionalFractions) {
+      if (this.#denominator === 1n) {
+        return {
+          baseStr: baseSystem.fromDecimal(this.#numerator),
+          period: 0,
+          limitHit: false
+        };
+      }
+      throw new RangeError("Fractional radix expansion requires a conventional positional BaseSystem; use toBase() for an exact fraction");
+    }
     if (this.#numerator < 0n) {
-      const result2 = this.negate().toRepeatingBaseWithPeriod(baseSystem, options);
+      const result = this.negate().toRepeatingBaseWithPeriod(baseSystem, options);
       return {
-        baseStr: "-" + result2.baseStr,
-        period: result2.period,
-        limitHit: result2.limitHit
+        baseStr: "-" + result.baseStr,
+        period: result.period,
+        limitHit: result.limitHit
       };
     }
     const baseBigInt = BigInt(baseSystem.base);
@@ -708,15 +1215,20 @@ class Rational {
     }
     return { baseStr: result, period, limitHit };
   }
-  periodModulo(baseSystem, limit = 1e6) {
+  periodModulo(baseSystem, limit = Rational.DEFAULT_PERIOD_MODULO_LIMIT) {
     if (!(baseSystem instanceof BaseSystem)) {
       throw new Error("Argument must be a BaseSystem");
     }
-    let num = this.#numerator < 0n ? -this.#numerator : this.#numerator;
+    if (!Number.isSafeInteger(limit) || limit < 1) {
+      throw new RangeError("Period limit must be a positive safe integer");
+    }
     let den = this.#denominator;
-    const baseBigInt = BigInt(baseSystem.base);
     if (den === 1n)
       return 0;
+    if (!baseSystem.supportsPositionalFractions) {
+      throw new RangeError("Period calculation requires a conventional positional BaseSystem");
+    }
+    const baseBigInt = BigInt(baseSystem.base);
     let common = this.#gcd(den, baseBigInt);
     while (common > 1n) {
       den /= common;
@@ -761,45 +1273,78 @@ class Rational {
     }
   }
   toNumber() {
-    return Number(this.#numerator) / Number(this.#denominator);
+    const numerator = this.#numerator;
+    const denominator = this.#denominator;
+    if (numerator === 0n)
+      return 0;
+    const SAFE = 9007199254740992n;
+    if (numerator < SAFE && numerator > -SAFE && denominator < SAFE) {
+      return Number(numerator) / Number(denominator);
+    }
+    const magnitude = numerator < 0n ? -numerator : numerator;
+    const shift = 64 - (bitLength(magnitude) - bitLength(denominator));
+    const quotient = shift >= 0 ? (magnitude << BigInt(shift)) / denominator : magnitude / (denominator << BigInt(-shift));
+    const half = Math.trunc(shift / 2);
+    const value = Number(quotient) * 2 ** -half * 2 ** -(shift - half);
+    return numerator < 0n ? -value : value;
   }
-  toRepeatingDecimal() {
-    const result = this.toRepeatingDecimalWithPeriod();
+  toRepeatingDecimal(limit = Rational.MAX_PERIOD_DIGITS, onLimit = "error") {
+    const result = this.toRepeatingDecimalWithPeriod({ limit, onLimit });
     return result.decimal;
   }
-  toRepeatingDecimalWithPeriod(useRepeatNotation = true) {
+  toRepeatingDecimalWithPeriod(options = true, legacyLimit, legacyOnLimit) {
+    if (typeof options !== "boolean" && (options === null || typeof options !== "object" || Array.isArray(options))) {
+      throw new TypeError("Repeating-decimal options must be a boolean or an object");
+    }
+    const normalized = typeof options === "boolean" ? {
+      useRepeatNotation: options,
+      limit: legacyLimit ?? Rational.MAX_PERIOD_DIGITS,
+      onLimit: legacyOnLimit ?? "error"
+    } : {
+      useRepeatNotation: options?.useRepeatNotation ?? true,
+      limit: options?.limit ?? Rational.MAX_PERIOD_DIGITS,
+      onLimit: options?.onLimit ?? "error"
+    };
+    const { useRepeatNotation, limit, onLimit } = normalized;
+    if (typeof useRepeatNotation !== "boolean") {
+      throw new TypeError("Repeating-decimal useRepeatNotation option must be a boolean");
+    }
+    if (!Number.isSafeInteger(limit) || limit < 1) {
+      throw new RangeError("Repeating-decimal limit must be a positive safe integer");
+    }
+    if (!new Set(["trunc", "null", "error"]).has(onLimit)) {
+      throw new TypeError('onLimit must be "trunc", "null", or "error"');
+    }
     if (this.#numerator === 0n) {
-      return { decimal: "0", period: 0 };
+      return { decimal: "0", period: 0, truncated: false };
     }
     this.#computeWholePart();
-    const maxDigits = useRepeatNotation ? 100 : Rational.DEFAULT_PERIOD_DIGITS;
-    this.#computeDecimalMetadata(maxDigits);
+    this.#computeDecimalMetadata(limit);
     let result = (this.#isNegative ? "-" : "") + this.#wholePart.toString();
     if (this.#isTerminating) {
       if (this.#initialSegment) {
         const formattedInitial = useRepeatNotation ? Rational.#formatRepeatedDigits(this.#initialSegment, 7) : this.#initialSegment;
         result += "." + formattedInitial + "#0";
-      } else {}
-      return { decimal: result, period: 0 };
+      }
+      return { decimal: result, period: 0, truncated: false };
     } else {
-      let periodDigits = this.#periodDigits;
-      if (this.#periodLength > 0 && this.#periodLength <= Rational.MAX_PERIOD_DIGITS && this.#periodDigits.length < this.#periodLength) {
-        periodDigits = this.extractPeriodSegment(this.#initialSegment, this.#periodLength, this.#periodLength);
-      }
-      const formattedInitial = useRepeatNotation ? Rational.#formatRepeatedDigits(this.#initialSegment, 7) : this.#initialSegment;
-      let displayPeriod = periodDigits;
-      if (useRepeatNotation && this.#leadingZerosInPeriod < 1000) {
-        const significantDigits = this.#periodDigitsRest;
-        if (significantDigits && significantDigits.length > 0) {
-          const leadingZerosFormatted = this.#leadingZerosInPeriod > 6 ? `{0~${this.#leadingZerosInPeriod}}` : this.#leadingZerosInPeriod > 0 ? "0".repeat(this.#leadingZerosInPeriod) : "";
-          const maxSignificantDigits = Math.min(significantDigits.length, 20);
-          displayPeriod = leadingZerosFormatted + significantDigits.substring(0, maxSignificantDigits);
-        } else {
-          displayPeriod = useRepeatNotation ? Rational.#formatRepeatedDigits(periodDigits, 7) : periodDigits;
+      const overLimit = this.#periodLength === -1 || this.#periodLength > limit;
+      if (overLimit) {
+        if (onLimit === "null") {
+          return { decimal: null, period: this.#periodLength, truncated: true };
         }
-      } else {
-        displayPeriod = useRepeatNotation ? Rational.#formatRepeatedDigits(periodDigits, 7) : periodDigits;
+        if (onLimit === "error") {
+          const period = this.#periodLength === -1 ? `more than ${Rational.MAX_PERIOD_CHECK.toLocaleString()}` : this.#periodLength.toString();
+          throw new RangeError(`Repeating decimal period is ${period} digits, exceeding limit ${limit}`);
+        }
+        const initial = useRepeatNotation ? Rational.#formatRepeatedDigits(this.#initialSegment, 7) : this.#initialSegment;
+        const periodPrefix = this.#periodDigits.slice(0, limit);
+        const decimal = `${result}.${initial}#${periodPrefix}...`;
+        return { decimal, period: this.#periodLength, truncated: true };
       }
+      const periodDigits = this.#periodDigits;
+      const formattedInitial = useRepeatNotation ? Rational.#formatRepeatedDigits(this.#initialSegment, 7) : this.#initialSegment;
+      const displayPeriod = useRepeatNotation ? Rational.#formatRepeatedDigits(periodDigits, 7) : periodDigits;
       if (this.#initialSegment) {
         result += "." + formattedInitial + "#" + displayPeriod;
       } else {
@@ -807,7 +1352,8 @@ class Rational {
       }
       return {
         decimal: result,
-        period: this.#periodLength
+        period: this.#periodLength,
+        truncated: false
       };
     }
   }
@@ -826,11 +1372,11 @@ class Rational {
       return 0;
     let count = 0;
     const powers = [
-      { exp: 16, value: Rational.POWERS_OF_5["16"] },
-      { exp: 8, value: Rational.POWERS_OF_5["8"] },
-      { exp: 4, value: Rational.POWERS_OF_5["4"] },
-      { exp: 2, value: Rational.POWERS_OF_5["2"] },
-      { exp: 1, value: Rational.POWERS_OF_5["1"] }
+      { exp: 16, value: POWERS_OF_5["16"] },
+      { exp: 8, value: POWERS_OF_5["8"] },
+      { exp: 4, value: POWERS_OF_5["4"] },
+      { exp: 2, value: POWERS_OF_5["2"] },
+      { exp: 1, value: POWERS_OF_5["1"] }
     ];
     for (const { exp, value } of powers) {
       while (n % value === 0n) {
@@ -840,11 +1386,6 @@ class Rational {
     }
     return count;
   }
-  bitLength() {
-    const numLen = bitLength(this.#numerator);
-    const denLen = bitLength(this.#denominator);
-    return Math.max(numLen, denLen);
-  }
   #computeWholePart() {
     if (this.#wholePart !== undefined)
       return;
@@ -852,17 +1393,17 @@ class Rational {
     this.#wholePart = absNumerator / this.#denominator;
     this.#remainder = absNumerator % this.#denominator;
   }
-  #computeLeadingZerosInPeriod(reducedDen, initialSegmentLength) {
-    let adjustedNumerator = this.#remainder * 10n ** BigInt(initialSegmentLength);
-    let leadingZeros = 0;
-    while (adjustedNumerator < reducedDen && leadingZeros < Rational.MAX_PERIOD_CHECK) {
-      adjustedNumerator *= 10n;
-      leadingZeros++;
+  #computeLeadingZerosInPeriod(periodRemainder) {
+    if (periodRemainder * 10n >= this.#denominator)
+      return 0;
+    let firstNonzeroPosition = this.#denominator.toString().length - periodRemainder.toString().length;
+    if (periodRemainder * 10n ** BigInt(firstNonzeroPosition) < this.#denominator) {
+      firstNonzeroPosition += 1;
     }
-    return leadingZeros;
+    return Math.max(0, firstNonzeroPosition - 1);
   }
-  #computeDecimalMetadata(maxPeriodDigits = Rational.DEFAULT_PERIOD_DIGITS) {
-    if (this.#periodLength !== undefined && this.#maxPeriodDigitsComputed !== undefined && this.#maxPeriodDigitsComputed >= maxPeriodDigits)
+  #computeDecimalMetadata(maxPeriodDigits = Rational.MAX_PERIOD_DIGITS) {
+    if (this.#periodLength !== undefined && this.#maxPeriodDigitsComputed !== undefined && this.#maxPeriodDigitsComputed >= maxPeriodDigits && this.#maxPeriodCheckComputed === Rational.MAX_PERIOD_CHECK)
       return;
     this.#computeWholePart();
     if (this.#remainder === 0n) {
@@ -877,6 +1418,7 @@ class Rational {
       this.#initialSegmentRest = "";
       this.#periodDigitsRest = "";
       this.#maxPeriodDigitsComputed = maxPeriodDigits;
+      this.#maxPeriodCheckComputed = Rational.MAX_PERIOD_CHECK;
       return;
     }
     this.#factorsOf2 = Rational.#countFactorsOf2(this.#denominator);
@@ -891,12 +1433,12 @@ class Rational {
     }
     if (reducedDen === 1n) {
       const digits = [];
-      let currentRemainder2 = this.#remainder;
-      for (let i = 0;i < initialSegmentLength && currentRemainder2 !== 0n; i++) {
-        currentRemainder2 *= 10n;
-        const digit = currentRemainder2 / this.#denominator;
+      let currentRemainder = this.#remainder;
+      for (let i = 0;i < initialSegmentLength && currentRemainder !== 0n; i++) {
+        currentRemainder *= 10n;
+        const digit = currentRemainder / this.#denominator;
         digits.push(digit.toString());
-        currentRemainder2 = currentRemainder2 % this.#denominator;
+        currentRemainder = currentRemainder % this.#denominator;
       }
       this.#initialSegment = digits.join("");
       this.#periodDigits = "";
@@ -905,17 +1447,21 @@ class Rational {
       this.#leadingZerosInPeriod = 0;
       this.#computeDecimalPartBreakdown();
       this.#maxPeriodDigitsComputed = maxPeriodDigits;
+      this.#maxPeriodCheckComputed = Rational.MAX_PERIOD_CHECK;
       return;
+    }
+    const maxPeriodCheck = Rational.MAX_PERIOD_CHECK;
+    if (!Number.isSafeInteger(maxPeriodCheck) || maxPeriodCheck < 1) {
+      throw new RangeError("Maximum period check must be a positive safe integer");
     }
     let periodLength = 1;
     let remainder = 10n % reducedDen;
-    while (remainder !== 1n && periodLength < Rational.MAX_PERIOD_CHECK) {
+    while (remainder !== 1n && periodLength < maxPeriodCheck) {
       periodLength++;
       remainder = remainder * 10n % reducedDen;
     }
-    this.#periodLength = periodLength >= Rational.MAX_PERIOD_CHECK ? -1 : periodLength;
+    this.#periodLength = remainder === 1n ? periodLength : -1;
     this.#isTerminating = false;
-    this.#leadingZerosInPeriod = this.#computeLeadingZerosInPeriod(reducedDen, initialSegmentLength);
     const initialDigits = [];
     let currentRemainder = this.#remainder;
     for (let i = 0;i < initialSegmentLength && currentRemainder !== 0n; i++) {
@@ -924,6 +1470,7 @@ class Rational {
       initialDigits.push(digit.toString());
       currentRemainder = currentRemainder % this.#denominator;
     }
+    this.#leadingZerosInPeriod = this.#computeLeadingZerosInPeriod(currentRemainder);
     const periodDigitsToCompute = this.#periodLength === -1 ? maxPeriodDigits : this.#periodLength > maxPeriodDigits ? maxPeriodDigits : this.#periodLength;
     const periodDigits = [];
     if (currentRemainder !== 0n) {
@@ -938,6 +1485,7 @@ class Rational {
     this.#periodDigits = periodDigits.join("");
     this.#computeDecimalPartBreakdown();
     this.#maxPeriodDigitsComputed = maxPeriodDigits;
+    this.#maxPeriodCheckComputed = maxPeriodCheck;
   }
   #computeDecimalPartBreakdown() {
     let leadingZeros = 0;
@@ -952,18 +1500,12 @@ class Rational {
     this.#initialSegmentLeadingZeros = leadingZeros;
     this.#initialSegmentRest = initialSegment.substring(leadingZeros);
     const periodDigits = this.#periodDigits || "";
-    let periodLeadingZeros = 0;
-    for (let i = 0;i < periodDigits.length; i++) {
-      if (periodDigits[i] === "0") {
-        periodLeadingZeros++;
-      } else {
-        break;
-      }
-    }
-    this.#leadingZerosInPeriod = periodLeadingZeros;
-    this.#periodDigitsRest = periodDigits.substring(periodLeadingZeros);
+    this.#periodDigitsRest = periodDigits.substring(this.#leadingZerosInPeriod);
   }
-  computeDecimalMetadata(maxPeriodDigits = Rational.DEFAULT_PERIOD_DIGITS) {
+  computeDecimalMetadata(maxPeriodDigits = Rational.MAX_PERIOD_DIGITS) {
+    if (!Number.isSafeInteger(maxPeriodDigits) || maxPeriodDigits < 1) {
+      throw new RangeError("Maximum period digits must be a positive safe integer");
+    }
     if (this.#numerator === 0n) {
       return {
         initialSegment: "",
@@ -973,15 +1515,16 @@ class Rational {
       };
     }
     this.#computeDecimalMetadata(maxPeriodDigits);
+    const periodDigits = this.#periodDigits.slice(0, maxPeriodDigits);
     return {
       wholePart: this.#wholePart,
       initialSegment: this.#initialSegment,
       initialSegmentLeadingZeros: this.#initialSegmentLeadingZeros,
       initialSegmentRest: this.#initialSegmentRest,
-      periodDigits: this.#periodDigits,
+      periodDigits,
       periodLength: this.#periodLength,
       leadingZerosInPeriod: this.#leadingZerosInPeriod,
-      periodDigitsRest: this.#periodDigitsRest,
+      periodDigitsRest: periodDigits.substring(this.#leadingZerosInPeriod),
       isTerminating: this.#isTerminating
     };
   }
@@ -1004,14 +1547,6 @@ class Rational {
       i += count;
     }
     return result;
-  }
-  static #parseRepeatedDigits(formattedDigits) {
-    if (!formattedDigits || !formattedDigits.includes("{")) {
-      return formattedDigits;
-    }
-    return formattedDigits.replace(/\{(.+?)~(\d+)\}/g, (match, digits, count) => {
-      return digits.repeat(parseInt(count));
-    });
   }
   extractPeriodSegment(initialSegment, periodLength, digitsRequested) {
     if (periodLength === 0 || periodLength === -1) {
@@ -1036,7 +1571,10 @@ class Rational {
     }
     return periodDigits.join("");
   }
-  toDecimal() {
+  toDecimal(maxDigits = Rational.DEFAULT_DECIMAL_DIGITS) {
+    if (!Number.isSafeInteger(maxDigits) || maxDigits < 1) {
+      throw new RangeError("Decimal digit limit must be a positive safe integer");
+    }
     if (this.#numerator === 0n) {
       return "0";
     }
@@ -1049,7 +1587,6 @@ class Rational {
       return (isNegative ? "-" : "") + integerPart.toString();
     }
     const digits = [];
-    const maxDigits = 20;
     for (let i = 0;i < maxDigits && remainder !== 0n; i++) {
       remainder *= 10n;
       const digit = remainder / den;
@@ -1063,7 +1600,7 @@ class Rational {
     return result;
   }
   E(exponent) {
-    const exp = BigInt(exponent);
+    const exp = toExactBigInt(exponent, "Exponent");
     let powerOf10;
     if (exp >= 0n) {
       powerOf10 = new Rational(10n ** exp, 1n);
@@ -1084,133 +1621,89 @@ class Rational {
       info.push(`period starts: +${this.#leadingZerosInPeriod} zeros`);
     }
     if (this.#periodLength === -1) {
-      info.push("period: >10^7");
+      info.push(`period: >${Rational.MAX_PERIOD_CHECK.toLocaleString()}`);
     } else if (this.#periodLength > 0) {
       info.push(`period: ${this.#periodLength}`);
     }
     return info.length > 0 ? ` {${info.join(", ")}}` : "";
   }
-  toScientificNotation(useRepeatNotation = true, precision = 11, showPeriodInfo = false) {
+  toScientificNotation(useRepeatNotation = true, precision = Rational.DEFAULT_SCIENTIFIC_PRECISION, showPeriodInfo = false) {
+    if (typeof useRepeatNotation !== "boolean") {
+      throw new TypeError("Scientific-notation useRepeatNotation must be a boolean");
+    }
+    if (typeof showPeriodInfo !== "boolean") {
+      throw new TypeError("Scientific-notation showPeriodInfo must be a boolean");
+    }
+    if (!Number.isSafeInteger(precision) || precision < 1) {
+      throw new RangeError("Scientific-notation precision must be a positive safe integer");
+    }
     if (this.#numerator === 0n) {
       return "0";
     }
     this.#computeWholePart();
-    this.#computeDecimalMetadata(100);
-    const isNegative = this.#isNegative;
-    const prefix = isNegative ? "-" : "";
-    if (this.#wholePart > 0n) {
-      const wholeStr = this.#wholePart.toString();
-      const firstDigit = wholeStr[0];
-      const exponent = wholeStr.length - 1;
-      let mantissa = firstDigit;
-      const hasMoreWholeDigits = wholeStr.length > 1;
-      const hasFractionalPart = this.#remainder > 0n;
-      if (hasFractionalPart || hasMoreWholeDigits) {
-        if (hasFractionalPart && !this.#isTerminating) {
-          mantissa += ".";
-          const remainingWholeDigits = hasMoreWholeDigits ? wholeStr.substring(1) : "";
-          const formattedInitial = useRepeatNotation ? Rational.#formatRepeatedDigits(this.#initialSegment, 7) : this.#initialSegment;
-          let periodDigits = this.#periodDigits;
-          if (this.#periodLength > 0 && this.#periodLength <= Rational.MAX_PERIOD_DIGITS && periodDigits.length < this.#periodLength) {
-            periodDigits = this.extractPeriodSegment(this.#initialSegment, this.#periodLength, Math.min(10, this.#periodLength));
-          }
-          if (remainingWholeDigits && periodDigits && remainingWholeDigits === periodDigits.substring(0, remainingWholeDigits.length)) {
-            mantissa += "#" + periodDigits;
-          } else {
-            if (hasMoreWholeDigits) {
-              mantissa += remainingWholeDigits;
-            }
-            mantissa += formattedInitial + "#";
-            const formattedPeriod = useRepeatNotation ? Rational.#formatRepeatedDigits(periodDigits, 7) : periodDigits.substring(0, Math.max(1, precision - mantissa.length + 1));
-            mantissa += formattedPeriod;
-          }
-        } else {
-          if (hasMoreWholeDigits || hasFractionalPart) {
-            mantissa += ".";
-            if (hasMoreWholeDigits) {
-              const remainingDigits = wholeStr.substring(1);
-              if (!hasFractionalPart) {
-                const trimmedDigits = remainingDigits.replace(/0+$/, "");
-                if (trimmedDigits === "") {
-                  mantissa = mantissa.slice(0, -1);
-                } else {
-                  mantissa += trimmedDigits;
-                }
-              } else {
-                mantissa += remainingDigits;
-              }
-            }
-            if (hasFractionalPart) {
-              const formattedInitial = useRepeatNotation ? Rational.#formatRepeatedDigits(this.#initialSegment, 7) : this.#initialSegment;
-              const trimmedInitial = formattedInitial.replace(/0+$/, "");
-              if (trimmedInitial) {
-                mantissa += trimmedInitial;
-              } else if (!hasMoreWholeDigits) {
-                mantissa = mantissa.slice(0, -1);
-              }
-            }
-          }
-        }
-      } else if (!hasFractionalPart && !hasMoreWholeDigits) {}
+    this.#computeDecimalMetadata(precision);
+    const prefix = this.#isNegative ? "-" : "";
+    const format = (digits) => useRepeatNotation ? Rational.#formatRepeatedDigits(digits, 7) : digits;
+    if (!this.#isTerminating && (this.#periodLength === -1 || this.#periodLength > precision)) {
+      let numerator = this.#numerator < 0n ? -this.#numerator : this.#numerator;
+      let denominator = this.#denominator;
+      let exponent = 0;
+      while (numerator >= denominator * 10n) {
+        denominator *= 10n;
+        exponent += 1;
+      }
+      while (numerator < denominator) {
+        numerator *= 10n;
+        exponent -= 1;
+      }
+      const digits = [];
+      for (let i = 0;i < precision; i += 1) {
+        digits.push((numerator / denominator).toString());
+        numerator = numerator % denominator * 10n;
+      }
+      const mantissa = digits[0] + (digits.length > 1 ? `.${digits.slice(1).join("")}` : "") + "...";
       const result = `${prefix}${mantissa}E${exponent}`;
       return result + this.#generatePeriodInfo(showPeriodInfo);
     }
-    if (this.#isTerminating) {
-      const leadingZeros = this.#initialSegmentLeadingZeros;
-      const rest = this.#initialSegmentRest;
-      if (rest === "") {
-        return prefix + "0";
-      }
-      const firstDigit = rest[0];
-      const exponent = -(leadingZeros + 1);
-      let mantissa = firstDigit;
-      if (rest.length > 1) {
-        const remainingDigits = Math.max(0, precision - 1);
-        mantissa += "." + rest.substring(1, remainingDigits + 1);
-      }
-      return `${prefix}${mantissa}E${exponent}`;
+    const whole = this.#wholePart.toString();
+    const period = this.#periodDigits;
+    let firstDigit;
+    let exponent;
+    let nonRepeatingTail = "";
+    let scientificPeriod = period;
+    if (this.#wholePart > 0n) {
+      firstDigit = whole[0];
+      exponent = whole.length - 1;
+      const wholeTail = whole.slice(1);
+      nonRepeatingTail = wholeTail + this.#initialSegment;
+    } else if (this.#initialSegmentRest !== "") {
+      const index = this.#initialSegmentLeadingZeros;
+      firstDigit = this.#initialSegment[index];
+      exponent = -(index + 1);
+      nonRepeatingTail = this.#initialSegment.slice(index + 1);
     } else {
-      const firstNonZeroInPeriod = this.#periodDigitsRest;
-      if (this.#initialSegmentRest !== "") {
-        const firstDigit = this.#initialSegmentRest[0];
-        const exponent = -(this.#initialSegmentLeadingZeros + 1);
-        let mantissa = firstDigit;
-        if (this.#initialSegmentRest.length > 1 || this.#periodDigits !== "") {
-          mantissa += ".";
-          if (this.#initialSegmentRest.length > 1) {
-            mantissa += this.#initialSegmentRest.substring(1);
-          }
-          mantissa += "#";
-          if (this.#leadingZerosInPeriod > 0 && useRepeatNotation && this.#leadingZerosInPeriod > 6) {
-            mantissa += `{0~${this.#leadingZerosInPeriod}}`;
-          } else if (this.#leadingZerosInPeriod > 0) {
-            mantissa += "0".repeat(Math.min(this.#leadingZerosInPeriod, 10));
-          }
-          if (firstNonZeroInPeriod !== "") {
-            const remainingLength = Math.max(1, precision - mantissa.length + 1);
-            mantissa += firstNonZeroInPeriod.substring(0, remainingLength);
-          }
-        }
-        const result = `${prefix}${mantissa}E${exponent}`;
-        return result + this.#generatePeriodInfo(showPeriodInfo);
-      } else if (firstNonZeroInPeriod !== "") {
-        const firstDigit = firstNonZeroInPeriod[0];
-        const totalLeadingZeros = this.#initialSegmentLeadingZeros + this.#leadingZerosInPeriod;
-        const exponent = -(totalLeadingZeros + 1);
-        let mantissa = firstDigit;
-        if (firstNonZeroInPeriod.length > 1) {
-          mantissa += ".#";
-          const remainingDigits = Math.max(0, precision - 3);
-          mantissa += firstNonZeroInPeriod.substring(1, remainingDigits + 1);
-        } else {
-          mantissa += ".#" + firstDigit;
-        }
-        const result = `${prefix}${mantissa}E${exponent}`;
-        return result + this.#generatePeriodInfo(showPeriodInfo);
-      } else {
-        return prefix + "0";
+      const index = period.search(/[1-9]/);
+      firstDigit = period[index];
+      exponent = -(this.#initialSegment.length + index + 1);
+      scientificPeriod = period.slice(index + 1) + period.slice(0, index + 1);
+    }
+    if (!this.#isTerminating) {
+      while (nonRepeatingTail.length > 0 && nonRepeatingTail.at(-1) === scientificPeriod.at(-1)) {
+        nonRepeatingTail = nonRepeatingTail.slice(0, -1);
+        scientificPeriod = scientificPeriod.at(-1) + scientificPeriod.slice(0, -1);
       }
     }
+    if (this.#isTerminating) {
+      const tail = nonRepeatingTail.replace(/0+$/, "");
+      const shown = tail.slice(0, Math.max(0, precision - 1));
+      const ellipsis = tail.length > shown.length ? "..." : "";
+      return `${prefix}${firstDigit}${shown ? `.${shown}` : ""}${ellipsis}E${exponent}`;
+    }
+    const initial = format(nonRepeatingTail);
+    const repeated = format(scientificPeriod);
+    const mantissa = `${firstDigit}.${initial}#${repeated}`;
+    const result = `${prefix}${mantissa}E${exponent}`;
+    return result + this.#generatePeriodInfo(showPeriodInfo);
   }
   static from(value) {
     if (value instanceof Rational) {
@@ -1219,105 +1712,30 @@ class Rational {
     return new Rational(value);
   }
   static DEFAULT_CF_LIMIT = 1000;
-  static fromContinuedFraction(cfArray) {
+  static #continuedFractionArray(cfArray) {
     if (!Array.isArray(cfArray) || cfArray.length === 0) {
       throw new Error("Continued fraction array cannot be empty");
     }
     const cf = cfArray.map((term) => {
       if (typeof term === "number") {
-        return BigInt(term);
-      } else if (typeof term === "bigint") {
-        return term;
-      } else {
-        throw new Error(`Invalid continued fraction term: ${term}`);
+        return toExactBigInt(term, "Continued fraction term");
       }
+      if (typeof term === "bigint") {
+        return term;
+      }
+      throw new Error(`Invalid continued fraction term: ${term}`);
     });
     for (let i = 1;i < cf.length; i++) {
       if (cf[i] <= 0n) {
         throw new Error(`Continued fraction terms must be positive: ${cf[i]}`);
       }
     }
-    if (cf.length === 1) {
-      return new Rational(cf[0], 1n);
-    }
-    let p_prev = 1n;
-    let p_curr = cf[0];
-    let q_prev = 0n;
-    let q_curr = 1n;
-    const convergents = [new Rational(p_curr, q_curr)];
-    for (let i = 1;i < cf.length; i++) {
-      const a = cf[i];
-      const p_next = a * p_curr + p_prev;
-      const q_next = a * q_curr + q_prev;
-      convergents.push(new Rational(p_next, q_next));
-      p_prev = p_curr;
-      p_curr = p_next;
-      q_prev = q_curr;
-      q_curr = q_next;
-    }
-    const result = convergents[convergents.length - 1];
-    result.cf = cf.slice(1);
-    result._convergents = convergents;
-    result.wholePart = cf[0];
-    return result;
-  }
-  toContinuedFraction(maxTerms = Rational.DEFAULT_CF_LIMIT) {
-    if (this.#denominator === 0n) {
-      throw new Error("Cannot convert infinite value to continued fraction");
-    }
-    if (this.#denominator === 1n) {
-      return [this.#numerator];
-    }
-    const cf = [];
-    let num = this.#numerator;
-    let den = this.#denominator;
-    const isNeg = num < 0n;
-    if (isNeg) {
-      num = -num;
-    }
-    let intPart = num / den;
-    if (isNeg) {
-      intPart = -intPart;
-      if (num % den !== 0n) {
-        intPart = intPart - 1n;
-        num = den - num % den;
-      } else {
-        num = num % den;
-      }
-    } else {
-      num = num % den;
-    }
-    cf.push(intPart);
-    let termCount = 1;
-    while (num !== 0n && termCount < maxTerms) {
-      const quotient = den / num;
-      cf.push(quotient);
-      const remainder = den % num;
-      den = num;
-      num = remainder;
-      termCount++;
-    }
-    if (cf.length > 1 && cf[cf.length - 1] === 1n) {
-      const secondLast = cf[cf.length - 2];
-      cf[cf.length - 2] = secondLast + 1n;
-      cf.pop();
-    }
-    this.cf = cf.slice(1);
-    if (!this.wholePart) {
-      this.wholePart = cf[0];
-    }
     return cf;
   }
-  toContinuedFractionString() {
-    const cf = this.toContinuedFraction();
-    if (cf.length === 1) {
-      return `${cf[0]}.~0`;
+  static #continuedFractionString(cfString) {
+    if (typeof cfString !== "string") {
+      throw new TypeError("Continued fraction must be a string");
     }
-    const intPart = cf[0];
-    const cfTerms = cf.slice(1);
-    return `${intPart}.~${cfTerms.join("~")}`;
-  }
-  static fromContinuedFractionString(cfString) {
     const cfMatch = cfString.match(/^(-?\d+)\.~(.*)$/);
     if (!cfMatch) {
       throw new Error("Invalid continued fraction format");
@@ -1325,7 +1743,7 @@ class Rational {
     const [, integerPart, cfTermsStr] = cfMatch;
     const intPart = BigInt(integerPart);
     if (cfTermsStr === "0") {
-      return new Rational(intPart, 1n);
+      return [intPart];
     }
     if (cfTermsStr === "") {
       throw new Error("Continued fraction must have at least one term after .~");
@@ -1336,9 +1754,7 @@ class Rational {
     if (cfTermsStr.includes("~~")) {
       throw new Error("Invalid continued fraction format: double tilde");
     }
-    const terms = cfTermsStr.split("~");
-    const cfTerms = [];
-    for (const term of terms) {
+    const cfTerms = cfTermsStr.split("~").map((term) => {
       if (!/^\d+$/.test(term)) {
         throw new Error(`Invalid continued fraction term: ${term}`);
       }
@@ -1346,77 +1762,249 @@ class Rational {
       if (termValue <= 0n) {
         throw new Error(`Continued fraction terms must be positive integers: ${term}`);
       }
-      cfTerms.push(termValue);
-    }
-    const cfArray = [intPart, ...cfTerms];
-    return Rational.fromContinuedFraction(cfArray);
+      return termValue;
+    });
+    return [intPart, ...cfTerms];
   }
-  convergents(maxCount = Rational.DEFAULT_CF_LIMIT) {
-    if (!this._convergents) {
-      const cf = this.toContinuedFraction(maxCount);
-      if (cf.length === 1) {
-        this._convergents = [new Rational(cf[0], 1n)];
-      } else {
-        let p_prev = 1n;
-        let p_curr = cf[0];
-        let q_prev = 0n;
-        let q_curr = 1n;
-        const convergents = [new Rational(p_curr, q_curr)];
-        for (let i = 1;i < cf.length; i++) {
-          const a = cf[i];
-          const p_next = a * p_curr + p_prev;
-          const q_next = a * q_curr + q_prev;
-          convergents.push(new Rational(p_next, q_next));
-          p_prev = p_curr;
-          p_curr = p_next;
-          q_prev = q_curr;
-          q_curr = q_next;
+  static #convergentsForCoefficients(cf, maxCount, intermediates = false) {
+    let previousPreviousNumerator = 0n;
+    let previousNumerator = 1n;
+    let previousPreviousDenominator = 1n;
+    let previousDenominator = 0n;
+    const convergents = [];
+    for (let index = 0;index < cf.length; index++) {
+      const coefficient = cf[index];
+      let currentNumerator;
+      let currentDenominator;
+      if (index > 0 && intermediates) {
+        for (let multiplier = 1n;multiplier <= coefficient; multiplier++) {
+          currentNumerator = multiplier * previousNumerator + previousPreviousNumerator;
+          currentDenominator = multiplier * previousDenominator + previousPreviousDenominator;
+          convergents.push(new Rational(currentNumerator, currentDenominator));
+          if (convergents.length >= maxCount) {
+            return convergents;
+          }
         }
-        this._convergents = convergents;
+      } else {
+        currentNumerator = coefficient * previousNumerator + previousPreviousNumerator;
+        currentDenominator = coefficient * previousDenominator + previousPreviousDenominator;
+        convergents.push(new Rational(currentNumerator, currentDenominator));
+        if (convergents.length >= maxCount) {
+          return convergents;
+        }
       }
+      previousPreviousNumerator = previousNumerator;
+      previousNumerator = currentNumerator;
+      previousPreviousDenominator = previousDenominator;
+      previousDenominator = currentDenominator;
     }
-    if (maxCount && this._convergents && this._convergents.length > maxCount) {
-      return this._convergents.slice(0, maxCount);
+    return convergents;
+  }
+  static fromContinuedFraction(cfArray) {
+    const cf = Rational.#continuedFractionArray(cfArray);
+    if (cf.length === 1) {
+      return new Rational(cf[0], 1n);
     }
-    return this._convergents || [];
+    let p_prev = 1n;
+    let p_curr = cf[0];
+    let q_prev = 0n;
+    let q_curr = 1n;
+    for (let i = 1;i < cf.length; i++) {
+      const a = cf[i];
+      const p_next = a * p_curr + p_prev;
+      const q_next = a * q_curr + q_prev;
+      p_prev = p_curr;
+      p_curr = p_next;
+      q_prev = q_curr;
+      q_curr = q_next;
+    }
+    return new Rational(p_curr, q_curr);
+  }
+  #continuedFractionResult(maxTerms, long) {
+    if (this.#denominator === 1n) {
+      const completeCoefficients = long ? [this.#numerator - 1n, 1n] : [this.#numerator];
+      return {
+        coefficients: completeCoefficients.slice(0, maxTerms),
+        complete: completeCoefficients.length <= maxTerms
+      };
+    }
+    const coefficients = [];
+    let numerator = this.#numerator;
+    let denominator = this.#denominator;
+    const negative = numerator < 0n;
+    if (negative)
+      numerator = -numerator;
+    let integerPart = numerator / denominator;
+    if (negative) {
+      integerPart = -integerPart;
+      if (numerator % denominator !== 0n) {
+        integerPart -= 1n;
+        numerator = denominator - numerator % denominator;
+      } else {
+        numerator %= denominator;
+      }
+    } else {
+      numerator %= denominator;
+    }
+    coefficients.push(integerPart);
+    while (numerator !== 0n && coefficients.length < maxTerms) {
+      coefficients.push(denominator / numerator);
+      const remainder = denominator % numerator;
+      denominator = numerator;
+      numerator = remainder;
+    }
+    if (numerator !== 0n) {
+      return { coefficients, complete: false };
+    }
+    if (coefficients.length > 1 && coefficients[coefficients.length - 1] === 1n) {
+      coefficients[coefficients.length - 2] += 1n;
+      coefficients.pop();
+    }
+    if (!long) {
+      return { coefficients, complete: true };
+    }
+    const longCoefficients = coefficients.slice();
+    longCoefficients[longCoefficients.length - 1] -= 1n;
+    longCoefficients.push(1n);
+    return {
+      coefficients: longCoefficients.slice(0, maxTerms),
+      complete: longCoefficients.length <= maxTerms
+    };
+  }
+  toContinuedFraction(options) {
+    const { maxTerms, long } = continuedFractionOptions(options, Rational.DEFAULT_CF_LIMIT);
+    if (!Number.isSafeInteger(maxTerms) || maxTerms < 1) {
+      throw new RangeError("Continued-fraction term limit must be a positive safe integer");
+    }
+    return this.#continuedFractionResult(maxTerms, long).coefficients;
+  }
+  toContinuedFractionString(options) {
+    const { maxTerms, long } = continuedFractionOptions(options, Rational.DEFAULT_CF_LIMIT);
+    if (!Number.isSafeInteger(maxTerms) || maxTerms < 1) {
+      throw new RangeError("Continued-fraction term limit must be a positive safe integer");
+    }
+    const { coefficients: cf, complete } = this.#continuedFractionResult(maxTerms, long);
+    if (cf.length === 1) {
+      return complete ? `${cf[0]}.~0` : `${cf[0]}.~...`;
+    }
+    const intPart = cf[0];
+    const cfTerms = cf.slice(1);
+    const suffix = complete ? "" : "~...";
+    return `${intPart}.~${cfTerms.join("~")}${suffix}`;
+  }
+  static fromContinuedFractionString(cfString) {
+    return Rational.fromContinuedFraction(Rational.#continuedFractionString(cfString));
+  }
+  convergents(options) {
+    const { maxCount, long, intermediates } = convergentOptions(options, Rational.DEFAULT_CF_LIMIT);
+    if (!Number.isSafeInteger(maxCount) || maxCount < 1) {
+      throw new RangeError("Convergent count must be a positive safe integer");
+    }
+    const cf = this.toContinuedFraction({ maxTerms: maxCount, long });
+    return Rational.#convergentsForCoefficients(cf, maxCount, intermediates);
   }
   getConvergent(n) {
-    const convergents = this.convergents();
-    if (n < 0 || n >= convergents.length) {
+    if (!Number.isSafeInteger(n) || n < 0) {
+      throw new RangeError("Convergent index must be a nonnegative safe integer");
+    }
+    const requestedCount = Math.min(n + 1, Number.MAX_SAFE_INTEGER);
+    const convergents = this.convergents(requestedCount);
+    if (n >= convergents.length) {
       throw new Error(`Convergent index ${n} out of range [0, ${convergents.length - 1}]`);
     }
     return convergents[n];
   }
   static convergentsFromCF(cfInput, maxCount = Rational.DEFAULT_CF_LIMIT) {
-    let cfArray;
-    if (typeof cfInput === "string") {
-      const rational2 = Rational.fromContinuedFractionString(cfInput);
-      return rational2.convergents(maxCount);
-    } else {
-      cfArray = cfInput;
+    if (!Number.isSafeInteger(maxCount) || maxCount < 1) {
+      throw new RangeError("Convergent count must be a positive safe integer");
     }
-    const rational = Rational.fromContinuedFraction(cfArray);
-    return rational.convergents(maxCount);
+    const cf = typeof cfInput === "string" ? Rational.#continuedFractionString(cfInput) : Rational.#continuedFractionArray(cfInput);
+    return Rational.#convergentsForCoefficients(cf, maxCount);
   }
   approximationError(target) {
     if (!(target instanceof Rational)) {
       throw new Error("Target must be a Rational");
     }
-    const diff = this.subtract(target);
-    return diff.isNegative ? diff.negate() : diff;
+    return this.subtract(target).abs();
   }
   bestApproximation(maxDenominator) {
-    const cf = this.toContinuedFraction();
-    let bestApprox = new Rational(cf[0], 1n);
-    const convergents = this.convergents();
-    for (const convergent of convergents) {
-      if (convergent.denominator <= maxDenominator) {
-        bestApprox = convergent;
-      } else {
+    if (typeof maxDenominator !== "bigint" || maxDenominator < 1n) {
+      throw new Error("Maximum denominator must be a positive bigint");
+    }
+    if (this.#denominator <= maxDenominator) {
+      return new Rational(this.#numerator, this.#denominator);
+    }
+    const negative = this.#numerator < 0n;
+    let numerator = negative ? -this.#numerator : this.#numerator;
+    let denominator = this.#denominator;
+    let previousNumerator = 0n;
+    let previousDenominator = 1n;
+    let currentNumerator = 1n;
+    let currentDenominator = 0n;
+    while (denominator !== 0n) {
+      const coefficient = numerator / denominator;
+      const nextDenominator = previousDenominator + coefficient * currentDenominator;
+      if (nextDenominator > maxDenominator) {
         break;
       }
+      [previousNumerator, currentNumerator] = [
+        currentNumerator,
+        previousNumerator + coefficient * currentNumerator
+      ];
+      [previousDenominator, currentDenominator] = [
+        currentDenominator,
+        nextDenominator
+      ];
+      [numerator, denominator] = [
+        denominator,
+        numerator - coefficient * denominator
+      ];
     }
-    return bestApprox;
+    const multiplier = (maxDenominator - previousDenominator) / currentDenominator;
+    const semiconvergentNumerator = previousNumerator + multiplier * currentNumerator;
+    const semiconvergentDenominator = previousDenominator + multiplier * currentDenominator;
+    const targetNumerator = negative ? -this.#numerator : this.#numerator;
+    const semiconvergentError = targetNumerator * semiconvergentDenominator - semiconvergentNumerator * this.#denominator;
+    const convergentError = targetNumerator * currentDenominator - currentNumerator * this.#denominator;
+    const absoluteSemiconvergentError = semiconvergentError < 0n ? -semiconvergentError : semiconvergentError;
+    const absoluteConvergentError = convergentError < 0n ? -convergentError : convergentError;
+    const useConvergent = absoluteConvergentError * semiconvergentDenominator <= absoluteSemiconvergentError * currentDenominator;
+    const resultNumerator = useConvergent ? currentNumerator : semiconvergentNumerator;
+    const resultDenominator = useConvergent ? currentDenominator : semiconvergentDenominator;
+    return new Rational(negative ? -resultNumerator : resultNumerator, resultDenominator);
+  }
+  bestConvergent(maxDenominator) {
+    if (typeof maxDenominator !== "bigint" || maxDenominator < 1n) {
+      throw new Error("Maximum denominator must be a positive bigint");
+    }
+    const negative = this.#numerator < 0n;
+    let numerator = negative ? -this.#numerator : this.#numerator;
+    let denominator = this.#denominator;
+    let previousNumerator = 0n;
+    let previousDenominator = 1n;
+    let currentNumerator = 1n;
+    let currentDenominator = 0n;
+    while (denominator !== 0n) {
+      const coefficient = numerator / denominator;
+      const nextNumerator = previousNumerator + coefficient * currentNumerator;
+      const nextDenominator = previousDenominator + coefficient * currentDenominator;
+      if (nextDenominator > maxDenominator) {
+        break;
+      }
+      [previousNumerator, currentNumerator] = [
+        currentNumerator,
+        nextNumerator
+      ];
+      [previousDenominator, currentDenominator] = [
+        currentDenominator,
+        nextDenominator
+      ];
+      [numerator, denominator] = [
+        denominator,
+        numerator - coefficient * denominator
+      ];
+    }
+    return new Rational(negative ? -currentNumerator : currentNumerator, currentDenominator);
   }
   bitLength() {
     return Math.max(bitLength(this.numerator), bitLength(this.denominator));
@@ -1424,7 +2012,101 @@ class Rational {
 }
 
 // ../../packages/core/src/rational-interval.js
+function hasTerminatingDecimal(value) {
+  let denominator = value.denominator;
+  while (denominator % 2n === 0n)
+    denominator /= 2n;
+  while (denominator % 5n === 0n)
+    denominator /= 5n;
+  return denominator === 1n;
+}
+function exactTerminatingDecimal(value) {
+  if (!hasTerminatingDecimal(value))
+    return null;
+  const isNegative = value.numerator < 0n;
+  const numerator = isNegative ? -value.numerator : value.numerator;
+  let denominator = value.denominator;
+  let twos = 0;
+  let fives = 0;
+  while (denominator % 2n === 0n) {
+    denominator /= 2n;
+    twos += 1;
+  }
+  while (denominator % 5n === 0n) {
+    denominator /= 5n;
+    fives += 1;
+  }
+  const decimalPlaces = Math.max(twos, fives);
+  const scale = 10n ** BigInt(decimalPlaces);
+  const scaled = numerator * (scale / value.denominator);
+  const integerPart = scaled / scale;
+  const sign = isNegative ? "-" : "";
+  if (decimalPlaces === 0)
+    return sign + integerPart.toString();
+  const fractionalPart = (scaled % scale).toString().padStart(decimalPlaces, "0").replace(/0+$/, "");
+  return fractionalPart.length === 0 ? sign + integerPart.toString() : `${sign}${integerPart}.${fractionalPart}`;
+}
+function exactOffsetString(value) {
+  return exactTerminatingDecimal(value) ?? value.toString();
+}
+var OUTWARD_DECIMAL_DIGITS = 20;
+function directedDecimal(value, direction, digits = OUTWARD_DECIMAL_DIGITS) {
+  const scale = 10n ** BigInt(digits);
+  const scaled = value.numerator * scale;
+  let units = scaled / value.denominator;
+  const exact = scaled % value.denominator === 0n;
+  if (!exact && direction === "down" && scaled < 0n)
+    units -= 1n;
+  if (!exact && direction === "up" && scaled > 0n)
+    units += 1n;
+  const negative = units < 0n;
+  const magnitude = (negative ? -units : units).toString().padStart(digits + 1, "0");
+  const whole = magnitude.slice(0, -digits);
+  const fraction = magnitude.slice(-digits).replace(/0+$/, "");
+  const text = fraction ? `${whole}.${fraction}` : whole;
+  return negative && text !== "0" ? `-${text}` : text;
+}
+function gcd2(a, b) {
+  while (b !== 0n)
+    [a, b] = [b, a % b];
+  return a < 0n ? -a : a;
+}
+function lcm(a, b) {
+  return a / gcd2(a, b) * b;
+}
+function randomBigIntBelow(limit, random) {
+  const draw = () => {
+    const value = random();
+    if (!Number.isFinite(value) || value < 0 || value >= 1) {
+      throw new RangeError("Random source must return a finite number in [0, 1)");
+    }
+    return value;
+  };
+  if (limit <= 9007199254740992n) {
+    return BigInt(Math.floor(draw() * Number(limit)));
+  }
+  const bitCount = limit.toString(2).length;
+  const chunks = Math.ceil(bitCount / 53);
+  const mask = (1n << BigInt(bitCount)) - 1n;
+  const rejectedCandidates = new Set;
+  while (true) {
+    let candidate = 0n;
+    for (let i = 0;i < chunks; i += 1) {
+      candidate = candidate << 53n | BigInt(Math.floor(draw() * 9007199254740992));
+    }
+    candidate &= mask;
+    if (candidate < limit)
+      return candidate;
+    if (rejectedCandidates.has(candidate)) {
+      throw new RangeError("Random source repeatedly produced a rejected value; it must vary between calls");
+    }
+    rejectedCandidates.add(candidate);
+  }
+}
+
 class RationalInterval {
+  #start;
+  #end;
   #low;
   #high;
   static zero = Object.freeze(new RationalInterval(Rational.zero, Rational.zero));
@@ -1433,6 +2115,8 @@ class RationalInterval {
   constructor(a, b) {
     const aRational = a instanceof Rational ? a : new Rational(a);
     const bRational = b instanceof Rational ? b : new Rational(b);
+    this.#start = aRational;
+    this.#end = bRational;
     if (aRational.lessThanOrEqual(bRational)) {
       this.#low = aRational;
       this.#high = bRational;
@@ -1441,6 +2125,15 @@ class RationalInterval {
       this.#high = aRational;
     }
   }
+  get start() {
+    return this.#start;
+  }
+  get end() {
+    return this.#end;
+  }
+  get isAscending() {
+    return this.#start.lessThanOrEqual(this.#end);
+  }
   get low() {
     return this.#low;
   }
@@ -1448,6 +2141,9 @@ class RationalInterval {
     return this.#high;
   }
   add(other) {
+    if (other?.isCertifiedApproximation === true) {
+      return this.add(other.enclosure);
+    }
     if (other.value !== undefined && typeof other.value === "bigint") {
       const otherAsRational = new Rational(other.value, 1n);
       const otherAsInterval = new RationalInterval(otherAsRational, otherAsRational);
@@ -1464,6 +2160,9 @@ class RationalInterval {
     }
   }
   subtract(other) {
+    if (other?.isCertifiedApproximation === true) {
+      return this.subtract(other.enclosure);
+    }
     if (other.value !== undefined && typeof other.value === "bigint") {
       const otherAsRational = new Rational(other.value, 1n);
       const otherAsInterval = new RationalInterval(otherAsRational, otherAsRational);
@@ -1480,6 +2179,9 @@ class RationalInterval {
     }
   }
   multiply(other) {
+    if (other?.isCertifiedApproximation === true) {
+      return this.multiply(other.enclosure);
+    }
     if (other.value !== undefined && typeof other.value === "bigint") {
       const otherAsRational = new Rational(other.value, 1n);
       const otherAsInterval = new RationalInterval(otherAsRational, otherAsRational);
@@ -1508,6 +2210,9 @@ class RationalInterval {
     }
   }
   divide(other) {
+    if (other?.isCertifiedApproximation === true) {
+      return this.divide(other.enclosure);
+    }
     if (other.value !== undefined && typeof other.value === "bigint") {
       if (other.value === 0n) {
         throw new Error("Division by zero");
@@ -1548,6 +2253,27 @@ class RationalInterval {
       throw new Error(`Cannot divide RationalInterval by ${other.constructor.name}`);
     }
   }
+  possibleRelationsTo(other) {
+    if (other?.isCertifiedApproximation === true)
+      other = other.enclosure;
+    if (other?.value !== undefined && typeof other.value === "bigint") {
+      other = new Rational(other.value, 1n);
+    }
+    if (other?.numerator !== undefined && other?.denominator !== undefined) {
+      other = new RationalInterval(other, other);
+    }
+    if (!other?.low || !other?.high) {
+      throw new TypeError("Possible relations require a Core numeric value");
+    }
+    let mask = 0;
+    if (this.#low.lessThan(other.high))
+      mask |= 1;
+    if (this.#low.lessThanOrEqual(other.high) && other.low.lessThanOrEqual(this.#high))
+      mask |= 2;
+    if (this.#high.greaterThan(other.low))
+      mask |= 4;
+    return mask;
+  }
   reciprocate() {
     if (this.containsZero()) {
       throw new Error("Cannot reciprocate an interval containing zero");
@@ -1558,7 +2284,7 @@ class RationalInterval {
     return new RationalInterval(this.#high.negate(), this.#low.negate());
   }
   pow(exponent) {
-    const n = BigInt(exponent);
+    const n = toExactBigInt(exponent, "Exponent");
     const zero = Rational.zero;
     if (n === 0n) {
       if (this.#low.equals(zero) && this.#high.equals(zero)) {
@@ -1601,16 +2327,7 @@ class RationalInterval {
     }
   }
   mpow(exponent) {
-    let n;
-    if (typeof exponent === "bigint") {
-      n = exponent;
-    } else if (typeof exponent === "number") {
-      n = BigInt(exponent);
-    } else if (typeof exponent === "string") {
-      n = BigInt(exponent);
-    } else {
-      n = BigInt(exponent);
-    }
+    const n = toExactBigInt(exponent, "Exponent");
     const zero = Rational.zero;
     if (n === 0n) {
       throw new Error("Multiplicative exponentiation requires at least one factor");
@@ -1667,21 +2384,23 @@ class RationalInterval {
     return new RationalInterval(newLow, newHigh);
   }
   toString() {
-    return `${this.#low.toString()}:${this.#high.toString()}`;
+    return `${this.#start.toString()}:${this.#end.toString()}`;
   }
   toMixedString() {
-    return `${this.#low.toMixedString()}:${this.#high.toMixedString()}`;
+    return `${this.#start.toMixedString()}:${this.#end.toMixedString()}`;
   }
   static point(value) {
     let r;
     if (value instanceof Rational) {
       r = value;
+    } else if (value && typeof value === "object" && typeof value.value === "bigint") {
+      r = new Rational(value.value);
     } else if (typeof value === "number") {
       r = new Rational(String(value));
     } else if (typeof value === "string" || typeof value === "bigint") {
       r = new Rational(value);
     } else {
-      r = new Rational(0);
+      throw new Error("Point value must be an Integer or Rational input");
     }
     return new RationalInterval(r, r);
   }
@@ -1692,98 +2411,125 @@ class RationalInterval {
     }
     return new RationalInterval(parts[0], parts[1]);
   }
-  toRepeatingDecimal(useRepeatNotation = true) {
-    const lowDecimal = this.#low.toRepeatingDecimalWithPeriod(useRepeatNotation).decimal;
-    const highDecimal = this.#high.toRepeatingDecimalWithPeriod(useRepeatNotation).decimal;
-    return `${lowDecimal}:${highDecimal}`;
+  toRepeatingDecimal(options = true) {
+    const startDecimal = this.#start.toRepeatingDecimalWithPeriod(options).decimal;
+    const endDecimal = this.#end.toRepeatingDecimalWithPeriod(options).decimal;
+    if (startDecimal === null || endDecimal === null)
+      return null;
+    return `${startDecimal}:${endDecimal}`;
   }
   compactedDecimalInterval() {
-    const lowStr = this.#low.toDecimal();
-    const highStr = this.#high.toDecimal();
+    const lowerFirst = this.#start.lessThanOrEqual(this.#end);
+    const startStr = directedDecimal(this.#start, lowerFirst ? "down" : "up");
+    const endStr = directedDecimal(this.#end, lowerFirst ? "up" : "down");
     let commonPrefix = "";
-    const minLength = Math.min(lowStr.length, highStr.length);
+    const minLength = Math.min(startStr.length, endStr.length);
     for (let i = 0;i < minLength; i++) {
-      if (lowStr[i] === highStr[i]) {
-        commonPrefix += lowStr[i];
+      if (startStr[i] === endStr[i]) {
+        commonPrefix += startStr[i];
       } else {
         break;
       }
     }
     if (commonPrefix.length <= 1 || commonPrefix.startsWith("-") && commonPrefix.length <= 2) {
-      return `${lowStr}:${highStr}`;
+      return `${startStr}:${endStr}`;
     }
-    const lowSuffix = lowStr.substring(commonPrefix.length);
-    const highSuffix = highStr.substring(commonPrefix.length);
-    if (!lowSuffix || !highSuffix || lowSuffix.length !== highSuffix.length) {
-      return `${lowStr}:${highStr}`;
+    const startSuffix = startStr.substring(commonPrefix.length);
+    const endSuffix = endStr.substring(commonPrefix.length);
+    if (!startSuffix || !endSuffix || startSuffix.length !== endSuffix.length) {
+      return `${startStr}:${endStr}`;
     }
-    if (!/^\d+$/.test(lowSuffix) || !/^\d+$/.test(highSuffix)) {
-      return `${lowStr}:${highStr}`;
+    if (!/^\d+$/.test(startSuffix) || !/^\d+$/.test(endSuffix)) {
+      return `${startStr}:${endStr}`;
     }
-    return `${commonPrefix}[${lowSuffix},${highSuffix}]`;
+    return `${commonPrefix}[${startSuffix}:${endSuffix}]`;
   }
   relativeMidDecimalInterval() {
-    const midpoint = this.#low.add(this.#high).divide(new Rational(2));
-    const offset = this.#high.subtract(midpoint);
-    const midpointStr = midpoint.toDecimal();
-    const offsetStr = offset.toDecimal();
-    return `${midpointStr}[+-${offsetStr}]`;
+    const exactMidpoint = this.#low.add(this.#high).divide(new Rational(2));
+    let midpointStr = exactTerminatingDecimal(exactMidpoint);
+    if (midpointStr === null || midpointStr.split(".")[1]?.length > OUTWARD_DECIMAL_DIGITS) {
+      const halfWidth = this.#high.subtract(exactMidpoint);
+      let places = 0;
+      while (places < OUTWARD_DECIMAL_DIGITS && halfWidth.multiply(new Rational(10n ** BigInt(places))).lessThan(Rational.one)) {
+        places += 1;
+      }
+      midpointStr = directedDecimal(exactMidpoint, "down", Math.min(places + 1, OUTWARD_DECIMAL_DIGITS));
+    }
+    const midpoint = new Rational(midpointStr);
+    const decimalPlaces = midpointStr.includes(".") ? midpointStr.split(".")[1].length : 0;
+    const scaleFactor = new Rational(10n ** BigInt(decimalPlaces));
+    const below = midpoint.subtract(this.#low).multiply(scaleFactor);
+    const above = this.#high.subtract(midpoint).multiply(scaleFactor);
+    if (below.equals(above) || below.lessThan(Rational.zero) || above.lessThan(Rational.zero)) {
+      const radius = below.abs().greaterThan(above.abs()) ? below.abs() : above.abs();
+      return `${midpointStr}[+-${directedDecimal(radius, "up")}]`;
+    }
+    const lowOffset = below.negate();
+    const lowStr = directedDecimal(lowOffset, "down");
+    const highStr = directedDecimal(above, "up");
+    const lowSign = lowOffset.compareTo(Rational.zero) > 0 ? "+" : "";
+    const highSign = above.compareTo(Rational.zero) > 0 ? "+" : "";
+    const [first, second] = this.#start.lessThanOrEqual(this.#end) ? [`${lowSign}${lowStr}`, `${highSign}${highStr}`] : [`${highSign}${highStr}`, `${lowSign}${lowStr}`];
+    return `${midpointStr}[${first}:${second}]`;
   }
   relativeDecimalInterval() {
-    const shortestDecimal = this.#findShortestPreciseDecimal();
-    const offsetLow = shortestDecimal.subtract(this.#low);
-    const offsetHigh = this.#high.subtract(shortestDecimal);
-    const decimalStr = shortestDecimal.toDecimal();
-    const decimalPlaces = decimalStr.includes(".") ? decimalStr.split(".")[1].length : 0;
-    let scaledOffsetLow, scaledOffsetHigh;
-    if (decimalPlaces === 0) {
-      scaledOffsetLow = offsetLow;
-      scaledOffsetHigh = offsetHigh;
-    } else {
-      const scaleFactor = new Rational(10).pow(decimalPlaces + 1);
-      scaledOffsetLow = offsetLow.multiply(scaleFactor);
-      scaledOffsetHigh = offsetHigh.multiply(scaleFactor);
+    if (this.#low.equals(this.#high)) {
+      return this.toRepeatingDecimal();
     }
-    const offsetLowStr = scaledOffsetLow.toDecimal();
-    const offsetHighStr = scaledOffsetHigh.toDecimal();
-    if (offsetLow.subtract(offsetHigh).abs().compareTo(new Rational(1, 1e6)) < 0) {
-      const avgOffset = scaledOffsetLow.add(scaledOffsetHigh).divide(new Rational(2));
-      return `${decimalStr}[+-${avgOffset.toDecimal()}]`;
+    const shortestDecimal = this.#findShortestPreciseDecimal();
+    const offsetStart = this.#start.subtract(shortestDecimal);
+    const offsetEnd = this.#end.subtract(shortestDecimal);
+    const decimalStr = exactTerminatingDecimal(shortestDecimal);
+    if (decimalStr === null) {
+      throw new Error("Shortest decimal search returned a non-terminating value");
+    }
+    const decimalPlaces = decimalStr.includes(".") ? decimalStr.split(".")[1].length : 0;
+    let scaledOffsetStart, scaledOffsetEnd;
+    if (decimalPlaces === 0) {
+      scaledOffsetStart = offsetStart;
+      scaledOffsetEnd = offsetEnd;
     } else {
-      return `${decimalStr}[+${offsetHighStr},-${offsetLowStr}]`;
+      const scaleFactor = new Rational(10).pow(decimalPlaces);
+      scaledOffsetStart = offsetStart.multiply(scaleFactor);
+      scaledOffsetEnd = offsetEnd.multiply(scaleFactor);
+    }
+    if (offsetStart.equals(offsetEnd.negate())) {
+      return `${decimalStr}[+-${exactOffsetString(scaledOffsetEnd.abs())}]`;
+    } else {
+      const off1 = { v: scaledOffsetStart };
+      const off2 = { v: scaledOffsetEnd };
+      const sorted = [off1, off2].sort((a, b) => b.v.compareTo(a.v));
+      const s1 = "+" + exactOffsetString(sorted[0].v.abs());
+      const s2 = "-" + exactOffsetString(sorted[1].v.abs());
+      return `${decimalStr}[${s1}:${s2}]`;
     }
   }
   #findShortestPreciseDecimal() {
     const midpoint = this.#low.add(this.#high).divide(new Rational(2));
-    for (let precision = 0;precision <= 20; precision++) {
-      const scale = new Rational(10).pow(precision);
+    let scale = Rational.one;
+    while (true) {
       const lowScaled = this.#low.multiply(scale);
       const highScaled = this.#high.multiply(scale);
       const minInt = this.#ceilRational(lowScaled);
       const maxInt = this.#floorRational(highScaled);
       if (minInt.compareTo(maxInt) <= 0) {
-        const candidates = [];
-        let current = minInt;
-        while (current.compareTo(maxInt) <= 0) {
-          candidates.push(current.divide(scale));
-          current = current.add(new Rational(1));
+        const scaledMidpoint = midpoint.multiply(scale);
+        let bestInt;
+        if (scaledMidpoint.lessThanOrEqual(minInt)) {
+          bestInt = minInt;
+        } else if (scaledMidpoint.greaterThanOrEqual(maxInt)) {
+          bestInt = maxInt;
+        } else {
+          const lower = this.#floorRational(scaledMidpoint);
+          const upper = this.#ceilRational(scaledMidpoint);
+          const lowerDistance = scaledMidpoint.subtract(lower).abs();
+          const upperDistance = upper.subtract(scaledMidpoint).abs();
+          bestInt = lowerDistance.lessThanOrEqual(upperDistance) ? lower : upper;
         }
-        if (candidates.length > 0) {
-          let best = candidates[0];
-          let bestDistance = best.subtract(midpoint).abs();
-          for (let i = 1;i < candidates.length; i++) {
-            const distance = candidates[i].subtract(midpoint).abs();
-            const comparison = distance.compareTo(bestDistance);
-            if (comparison < 0 || comparison === 0 && candidates[i].compareTo(best) < 0) {
-              best = candidates[i];
-              bestDistance = distance;
-            }
-          }
-          return best;
-        }
+        return bestInt.divide(scale);
       }
+      scale = scale.multiply(new Rational(10));
     }
-    return midpoint;
   }
   #ceilRational(rational) {
     if (rational.denominator === 1n) {
@@ -1807,9 +2553,6 @@ class RationalInterval {
       return new Rational(quotient - 1n, 1n);
     }
   }
-  bitLength() {
-    return Math.max(this.#low.bitLength(), this.#high.bitLength());
-  }
   mediant() {
     return new Rational(this.#low.numerator + this.#high.numerator, this.#low.denominator + this.#high.denominator);
   }
@@ -1817,63 +2560,64 @@ class RationalInterval {
     return this.#low.add(this.#high).divide(new Rational(2));
   }
   shortestDecimal(base = 10) {
-    const baseBigInt = BigInt(base);
+    const baseBigInt = toExactBigInt(base, "Base");
     if (baseBigInt <= 1n) {
       throw new Error("Base must be greater than 1");
     }
     if (this.#low.equals(this.#high)) {
       const value = this.#low;
-      let k2 = 0;
-      let denominator2 = 1n;
-      while (k2 <= 50) {
-        const numeratorCandidate = value.multiply(new Rational(denominator2));
-        if (numeratorCandidate.denominator === 1n) {
-          return new Rational(numeratorCandidate.numerator, denominator2);
-        }
-        k2++;
-        denominator2 *= baseBigInt;
+      let remainingDenominator = value.denominator;
+      while (remainingDenominator !== 1n) {
+        const commonFactor = this.#gcd(remainingDenominator, baseBigInt);
+        if (commonFactor === 1n)
+          return null;
+        remainingDenominator /= commonFactor;
       }
-      return null;
+      return new Rational(value.numerator, value.denominator);
     }
-    const intervalLength = this.#high.subtract(this.#low);
-    const lengthAsNumber = Number(intervalLength.numerator) / Number(intervalLength.denominator);
-    const baseAsNumber = Number(baseBigInt);
-    let maxK = Math.ceil(Math.log(1 / lengthAsNumber) / Math.log(baseAsNumber));
-    maxK = Math.max(0, maxK + 2);
-    let k = 0;
     let denominator = 1n;
-    while (k <= maxK) {
+    while (true) {
       const minNumerator = this.#ceilRational(this.#low.multiply(new Rational(denominator)));
       const maxNumerator = this.#floorRational(this.#high.multiply(new Rational(denominator)));
       if (minNumerator.lessThanOrEqual(maxNumerator)) {
         return new Rational(minNumerator.numerator, denominator);
       }
-      k++;
       denominator *= baseBigInt;
     }
-    throw new Error("Failed to find shortest decimal representation (exceeded theoretical bound)");
   }
-  randomRational(maxDenominator = 1000) {
-    const maxDenom = BigInt(maxDenominator);
-    if (maxDenom <= 0n) {
-      throw new Error("maxDenominator must be positive");
+  denominatorInterval(denominator, onEmpty = "error") {
+    const gridDenominator = denominator === undefined ? lcm(this.#low.denominator, this.#high.denominator) : toExactBigInt(denominator, "Grid denominator");
+    if (gridDenominator <= 0n) {
+      throw new RangeError("Grid denominator must be positive");
     }
-    const validRationals = [];
-    for (let denom = 1n;denom <= maxDenom; denom++) {
-      const minNum = this.#ceilRational(this.#low.multiply(new Rational(denom)));
-      const maxNum = this.#floorRational(this.#high.multiply(new Rational(denom)));
-      for (let num = minNum.numerator;num <= maxNum.numerator; num++) {
-        const candidate = new Rational(num, denom);
-        if (candidate.numerator === num && candidate.denominator === denom) {
-          validRationals.push(candidate);
-        }
-      }
+    if (!new Set(["mid", "null", "error"]).has(onEmpty)) {
+      throw new TypeError('onEmpty must be "mid", "null", or "error"');
     }
-    if (validRationals.length === 0) {
-      return this.midpoint();
+    const first = this.#ceilRational(this.#low.multiply(new Rational(gridDenominator))).numerator;
+    const last = this.#floorRational(this.#high.multiply(new Rational(gridDenominator))).numerator;
+    if (first <= last) {
+      return new RationalInterval(new Rational(first, gridDenominator), new Rational(last, gridDenominator));
     }
-    const randomIndex = Math.floor(Math.random() * validRationals.length);
-    return validRationals[randomIndex];
+    if (onEmpty === "null")
+      return null;
+    if (onEmpty === "mid")
+      return RationalInterval.point(this.midpoint());
+    throw new RangeError(`No rational with grid denominator ${gridDenominator} lies in this interval`);
+  }
+  randomRational(denominator, onEmpty = "error", random = Math.random) {
+    if (typeof random !== "function") {
+      throw new TypeError("Random source must be a function");
+    }
+    const gridDenominator = denominator === undefined ? lcm(this.#low.denominator, this.#high.denominator) : toExactBigInt(denominator, "Grid denominator");
+    const grid = this.denominatorInterval(gridDenominator, onEmpty);
+    if (grid === null)
+      return null;
+    const first = this.#ceilRational(this.#low.multiply(new Rational(gridDenominator))).numerator;
+    const last = this.#floorRational(this.#high.multiply(new Rational(gridDenominator))).numerator;
+    if (first > last)
+      return grid.start;
+    const numerator = first + randomBigIntBelow(last - first + 1n, random);
+    return new Rational(numerator, gridDenominator);
   }
   #gcd(a, b) {
     a = a < 0n ? -a : a;
@@ -1886,7 +2630,7 @@ class RationalInterval {
     return a;
   }
   E(exponent) {
-    const exp = BigInt(exponent);
+    const exp = toExactBigInt(exponent, "Exponent");
     let powerOf10;
     if (exp >= 0n) {
       powerOf10 = new Rational(10n ** exp, 1n);
@@ -1902,18 +2646,689 @@ class RationalInterval {
     const highBits = this.#high.bitLength();
     return Math.max(lowBits, highBits);
   }
+  toJSON() {
+    return { $ratmath: "RationalInterval", start: this.#start, end: this.#end };
+  }
 }
+
+// ../../packages/core/src/rational-interval-set.js
+function asRational(value, name) {
+  if (value === null)
+    return null;
+  if (value === undefined) {
+    throw new TypeError(`${name} endpoint is required; use null for infinity`);
+  }
+  return value instanceof Rational ? value : new Rational(value);
+}
+function compareFinite(left, right) {
+  if (left.lessThan(right))
+    return -1;
+  if (left.greaterThan(right))
+    return 1;
+  return 0;
+}
+function compareLow(left, right) {
+  if (left === null)
+    return right === null ? 0 : -1;
+  if (right === null)
+    return 1;
+  return compareFinite(left, right);
+}
+function compareHigh(left, right) {
+  if (left === null)
+    return right === null ? 0 : 1;
+  if (right === null)
+    return -1;
+  return compareFinite(left, right);
+}
+function freezeComponent(component) {
+  return Object.freeze(component);
+}
+function normalizeComponent(input) {
+  if (input instanceof RationalInterval) {
+    return freezeComponent({
+      low: input.low,
+      high: input.high,
+      lowClosed: true,
+      highClosed: true
+    });
+  }
+  if (!input || typeof input !== "object") {
+    throw new TypeError("Interval-set components must be interval objects");
+  }
+  const low = asRational(input.low, "Low");
+  const high = asRational(input.high, "High");
+  const lowClosed = input.lowClosed ?? low !== null;
+  const highClosed = input.highClosed ?? high !== null;
+  if (typeof lowClosed !== "boolean" || typeof highClosed !== "boolean") {
+    throw new TypeError("Endpoint closure flags must be booleans");
+  }
+  if (low === null && lowClosed) {
+    throw new RangeError("-Infinity cannot be a closed endpoint");
+  }
+  if (high === null && highClosed) {
+    throw new RangeError("+Infinity cannot be a closed endpoint");
+  }
+  if (low !== null && high !== null) {
+    const order = compareFinite(low, high);
+    if (order > 0)
+      throw new RangeError("Interval-set low endpoint exceeds high endpoint");
+    if (order === 0 && !(lowClosed && highClosed))
+      return null;
+  }
+  return freezeComponent({ low, high, lowClosed, highClosed });
+}
+function componentsJoin(left, right) {
+  if (right.low === null)
+    return true;
+  if (left.high === null)
+    return true;
+  const order = compareFinite(left.high, right.low);
+  return order > 0 || order === 0 && (left.highClosed || right.lowClosed);
+}
+function mergeComponents(left, right) {
+  let high;
+  let highClosed;
+  const highOrder = compareHigh(left.high, right.high);
+  if (highOrder > 0) {
+    high = left.high;
+    highClosed = left.highClosed;
+  } else if (highOrder < 0) {
+    high = right.high;
+    highClosed = right.highClosed;
+  } else {
+    high = left.high;
+    highClosed = left.high === null ? false : left.highClosed || right.highClosed;
+  }
+  const sameLow = compareLow(left.low, right.low) === 0;
+  return freezeComponent({
+    low: left.low,
+    high,
+    lowClosed: left.low === null ? false : left.lowClosed || sameLow && right.lowClosed,
+    highClosed
+  });
+}
+function normalizeComponents(inputs) {
+  const sorted = inputs.map(normalizeComponent).filter((component) => component !== null).sort((left, right) => {
+    const byLow = compareLow(left.low, right.low);
+    if (byLow !== 0)
+      return byLow;
+    if (left.lowClosed !== right.lowClosed)
+      return left.lowClosed ? -1 : 1;
+    return compareHigh(right.high, left.high);
+  });
+  const result = [];
+  for (const component of sorted) {
+    const previous = result.at(-1);
+    if (!previous || !componentsJoin(previous, component)) {
+      result.push(component);
+    } else {
+      result[result.length - 1] = mergeComponents(previous, component);
+    }
+  }
+  return Object.freeze(result);
+}
+function componentContainsValue(component, value) {
+  const aboveLow = component.low === null || component.low.lessThan(value) || component.low.equals(value) && component.lowClosed;
+  const belowHigh = component.high === null || component.high.greaterThan(value) || component.high.equals(value) && component.highClosed;
+  return aboveLow && belowHigh;
+}
+function componentContainsComponent(outer, inner) {
+  let lowerContained;
+  if (outer.low === null) {
+    lowerContained = true;
+  } else if (inner.low === null) {
+    lowerContained = false;
+  } else {
+    const order = compareFinite(outer.low, inner.low);
+    lowerContained = order < 0 || order === 0 && (outer.lowClosed || !inner.lowClosed);
+  }
+  let upperContained;
+  if (outer.high === null) {
+    upperContained = true;
+  } else if (inner.high === null) {
+    upperContained = false;
+  } else {
+    const order = compareFinite(outer.high, inner.high);
+    upperContained = order > 0 || order === 0 && (outer.highClosed || !inner.highClosed);
+  }
+  return lowerContained && upperContained;
+}
+function intersectionComponent(left, right) {
+  let low;
+  let lowClosed;
+  const lowOrder = compareLow(left.low, right.low);
+  if (lowOrder > 0) {
+    low = left.low;
+    lowClosed = left.lowClosed;
+  } else if (lowOrder < 0) {
+    low = right.low;
+    lowClosed = right.lowClosed;
+  } else {
+    low = left.low;
+    lowClosed = low === null ? false : left.lowClosed && right.lowClosed;
+  }
+  let high;
+  let highClosed;
+  const highOrder = compareHigh(left.high, right.high);
+  if (highOrder < 0) {
+    high = left.high;
+    highClosed = left.highClosed;
+  } else if (highOrder > 0) {
+    high = right.high;
+    highClosed = right.highClosed;
+  } else {
+    high = left.high;
+    highClosed = high === null ? false : left.highClosed && right.highClosed;
+  }
+  if (low !== null && high !== null) {
+    const order = compareFinite(low, high);
+    if (order > 0 || order === 0 && !(lowClosed && highClosed))
+      return null;
+  }
+  return freezeComponent({ low, high, lowClosed, highClosed });
+}
+function asIntervalSet(value) {
+  if (value instanceof RationalIntervalSet)
+    return value;
+  return new RationalIntervalSet(value);
+}
+function formatEndpoint(value, negative) {
+  if (value === null)
+    return negative ? "-inf" : "inf";
+  return value.toString();
+}
+
+class RationalIntervalSet {
+  #components;
+  static empty = Object.freeze(new RationalIntervalSet);
+  static allReals = Object.freeze(new RationalIntervalSet({
+    low: null,
+    high: null,
+    lowClosed: false,
+    highClosed: false
+  }));
+  constructor(components = []) {
+    if (components instanceof RationalIntervalSet) {
+      this.#components = components.#components;
+      return;
+    }
+    const inputs = Array.isArray(components) ? components : [components];
+    this.#components = normalizeComponents(inputs);
+  }
+  get components() {
+    return this.#components;
+  }
+  get isEmpty() {
+    return this.#components.length === 0;
+  }
+  get isConnected() {
+    return this.#components.length <= 1;
+  }
+  get isBounded() {
+    return this.isEmpty || this.#components[0].low !== null && this.#components.at(-1).high !== null;
+  }
+  get componentCount() {
+    return this.#components.length;
+  }
+  containsValue(value) {
+    const rational = value instanceof Rational ? value : new Rational(value);
+    return this.#components.some((component) => componentContainsValue(component, rational));
+  }
+  contains(other) {
+    const set = asIntervalSet(other);
+    return set.#components.every((inner) => this.#components.some((outer) => componentContainsComponent(outer, inner)));
+  }
+  equals(other) {
+    const set = asIntervalSet(other);
+    if (this.componentCount !== set.componentCount)
+      return false;
+    return this.#components.every((left, index) => {
+      const right = set.#components[index];
+      return compareLow(left.low, right.low) === 0 && compareHigh(left.high, right.high) === 0 && left.lowClosed === right.lowClosed && left.highClosed === right.highClosed;
+    });
+  }
+  union(other) {
+    const set = asIntervalSet(other);
+    return new RationalIntervalSet([...this.#components, ...set.#components]);
+  }
+  intersection(other) {
+    const set = asIntervalSet(other);
+    const intersections = [];
+    let leftIndex = 0;
+    let rightIndex = 0;
+    while (leftIndex < this.componentCount && rightIndex < set.componentCount) {
+      const left = this.#components[leftIndex];
+      const right = set.#components[rightIndex];
+      const component = intersectionComponent(left, right);
+      if (component)
+        intersections.push(component);
+      const endOrder = compareHigh(left.high, right.high);
+      if (endOrder <= 0)
+        leftIndex += 1;
+      if (endOrder >= 0)
+        rightIndex += 1;
+    }
+    return new RationalIntervalSet(intersections);
+  }
+  hull() {
+    if (this.isEmpty)
+      return RationalIntervalSet.empty;
+    const first = this.#components[0];
+    const last = this.#components.at(-1);
+    return new RationalIntervalSet({
+      low: first.low,
+      high: last.high,
+      lowClosed: first.lowClosed,
+      highClosed: last.highClosed
+    });
+  }
+  toRationalInterval() {
+    if (this.componentCount !== 1)
+      return null;
+    const component = this.#components[0];
+    if (component.low === null || component.high === null || !component.lowClosed || !component.highClosed)
+      return null;
+    return new RationalInterval(component.low, component.high);
+  }
+  toString() {
+    if (this.isEmpty)
+      return "empty";
+    return this.#components.map((component) => {
+      const left = component.lowClosed ? "[" : "(";
+      const right = component.highClosed ? "]" : ")";
+      return `${left}${formatEndpoint(component.low, true)},${formatEndpoint(component.high, false)}${right}`;
+    }).join(" U ");
+  }
+  toJSON() {
+    return {
+      $ratmath: "RationalIntervalSet",
+      version: 1,
+      components: this.#components.map((component) => ({ ...component }))
+    };
+  }
+  static point(value) {
+    const rational = value instanceof Rational ? value : new Rational(value);
+    return new RationalIntervalSet({
+      low: rational,
+      high: rational,
+      lowClosed: true,
+      highClosed: true
+    });
+  }
+  static fromInterval(interval) {
+    if (!(interval instanceof RationalInterval)) {
+      throw new TypeError("Expected a RationalInterval");
+    }
+    return new RationalIntervalSet(interval);
+  }
+}
+
+// ../../packages/core/src/range-arithmetic.js
+var ZERO = Rational.zero;
+var ONE = Rational.one;
+var RESULT_SCHEMA = "ratmath.range-operation-result@1";
+var CHECKER_ID = "ratmath.core.range-arithmetic@1";
+function isScalarInput(value) {
+  return value instanceof Rational || value?.constructor?.name === "Integer" || typeof value === "number" || typeof value === "bigint" || typeof value === "string";
+}
+function asRationalIntervalSet(value) {
+  if (value instanceof RationalIntervalSet)
+    return value;
+  if (value instanceof RationalInterval)
+    return RationalIntervalSet.fromInterval(value);
+  if (isScalarInput(value)) {
+    return RationalIntervalSet.point(value?.constructor?.name === "Integer" ? value.value : value);
+  }
+  return new RationalIntervalSet(value);
+}
+function exactInteger(value, label = "Exponent") {
+  if (typeof value === "bigint")
+    return value;
+  if (typeof value === "number" && Number.isSafeInteger(value))
+    return BigInt(value);
+  if (typeof value === "string") {
+    const rational = new Rational(value);
+    if (rational.denominator === 1n)
+      return rational.numerator;
+  }
+  if (value?.constructor?.name === "Integer")
+    return value.value;
+  if (value instanceof Rational && value.denominator === 1n)
+    return value.numerator;
+  throw new TypeError(`${label} must be an exact integer`);
+}
+function negateComponent(component) {
+  return {
+    low: component.high === null ? null : component.high.negate(),
+    high: component.low === null ? null : component.low.negate(),
+    lowClosed: component.high === null ? false : component.highClosed,
+    highClosed: component.low === null ? false : component.lowClosed
+  };
+}
+function addComponents(left, right) {
+  const low = left.low === null || right.low === null ? null : left.low.add(right.low);
+  const high = left.high === null || right.high === null ? null : left.high.add(right.high);
+  return {
+    low,
+    high,
+    lowClosed: low === null ? false : left.lowClosed && right.lowClosed,
+    highClosed: high === null ? false : left.highClosed && right.highClosed
+  };
+}
+function containsZeroComponent(component) {
+  const aboveLow = component.low === null || component.low.lessThan(ZERO) || component.low.equals(ZERO) && component.lowClosed;
+  const belowHigh = component.high === null || component.high.greaterThan(ZERO) || component.high.equals(ZERO) && component.highClosed;
+  return aboveLow && belowHigh;
+}
+function hasPositiveValue(component) {
+  return component.high === null || component.high.greaterThan(ZERO);
+}
+function nonnegativeProductComponent(left, right) {
+  const low = left.low.multiply(right.low);
+  const lowClosed = low.equals(ZERO) ? containsZeroComponent(left) || containsZeroComponent(right) : left.lowClosed && right.lowClosed;
+  const unbounded = left.high === null && hasPositiveValue(right) || right.high === null && hasPositiveValue(left);
+  if (unbounded) {
+    return { low, high: null, lowClosed, highClosed: false };
+  }
+  if (left.high === null || right.high === null) {
+    return { low: ZERO, high: ZERO, lowClosed: true, highClosed: true };
+  }
+  const high = left.high.multiply(right.high);
+  return {
+    low,
+    high,
+    lowClosed,
+    highClosed: high.equals(ZERO) ? true : left.highClosed && right.highClosed
+  };
+}
+function nonpositiveToNonnegative(component) {
+  return negateComponent(component);
+}
+function splitBySign(set, includeZero) {
+  const negative = set.intersection({
+    low: null,
+    high: ZERO,
+    lowClosed: false,
+    highClosed: includeZero
+  });
+  const positive = set.intersection({
+    low: ZERO,
+    high: null,
+    lowClosed: includeZero,
+    highClosed: false
+  });
+  return { negative, positive };
+}
+function withoutZero(set) {
+  const { negative, positive } = splitBySign(set, false);
+  return negative.union(positive);
+}
+function multiplySets(left, right) {
+  const leftSigns = splitBySign(left, true);
+  const rightSigns = splitBySign(right, true);
+  const components = [];
+  const appendPositiveProducts = (leftSet, rightSet, negate = false) => {
+    for (const a of leftSet.components) {
+      for (const b of rightSet.components) {
+        const product = nonnegativeProductComponent(a, b);
+        components.push(negate ? negateComponent(product) : product);
+      }
+    }
+  };
+  const leftNegativeMagnitude = new RationalIntervalSet(leftSigns.negative.components.map(nonpositiveToNonnegative));
+  const rightNegativeMagnitude = new RationalIntervalSet(rightSigns.negative.components.map(nonpositiveToNonnegative));
+  appendPositiveProducts(leftSigns.positive, rightSigns.positive);
+  appendPositiveProducts(leftNegativeMagnitude, rightNegativeMagnitude);
+  appendPositiveProducts(leftNegativeMagnitude, rightSigns.positive, true);
+  appendPositiveProducts(leftSigns.positive, rightNegativeMagnitude, true);
+  return new RationalIntervalSet(components);
+}
+function reciprocalPositiveComponent(component) {
+  const low = component.high === null ? ZERO : component.high.reciprocal();
+  const high = component.low.equals(ZERO) ? null : component.low.reciprocal();
+  return {
+    low,
+    high,
+    lowClosed: component.high === null ? false : component.highClosed,
+    highClosed: high === null ? false : component.lowClosed
+  };
+}
+function reciprocalNegativeComponent(component) {
+  const low = component.high.equals(ZERO) ? null : component.high.reciprocal();
+  const high = component.low === null ? ZERO : component.low.reciprocal();
+  return {
+    low,
+    high,
+    lowClosed: low === null ? false : component.highClosed,
+    highClosed: component.low === null ? false : component.lowClosed
+  };
+}
+function reciprocalSet(set) {
+  const { negative, positive } = splitBySign(set, false);
+  return new RationalIntervalSet([
+    ...negative.components.map(reciprocalNegativeComponent),
+    ...positive.components.map(reciprocalPositiveComponent)
+  ]);
+}
+function positiveIntegerPowerSet(set, exponent) {
+  if (exponent <= 0n)
+    throw new RangeError("Positive power helper requires exponent > 0");
+  const odd = (exponent & 1n) === 1n;
+  const source = odd ? set : absoluteSet(set);
+  return new RationalIntervalSet(source.components.map((component) => ({
+    low: component.low === null ? null : component.low.pow(exponent),
+    high: component.high === null ? null : component.high.pow(exponent),
+    lowClosed: component.low === null ? false : component.lowClosed,
+    highClosed: component.high === null ? false : component.highClosed
+  })));
+}
+function absoluteSet(set) {
+  const { negative, positive } = splitBySign(set, true);
+  return new RationalIntervalSet([
+    ...negative.components.map(negateComponent),
+    ...positive.components
+  ]);
+}
+function unaryCoverage(set, definedInput) {
+  if (set.isEmpty)
+    return "allDefined";
+  if (definedInput.equals(set))
+    return "allDefined";
+  if (definedInput.isEmpty)
+    return "noDefinedInputs";
+  return "partiallyDefined";
+}
+function freezeExclusion(exclusion) {
+  return Object.freeze({ ...exclusion });
+}
+function domainRecord(coverage, options = {}) {
+  return Object.freeze({
+    coverage,
+    ...options.definedInput ? { definedInput: options.definedInput } : {},
+    exclusions: Object.freeze((options.exclusions || []).map(freezeExclusion))
+  });
+}
+function operationResult(operation, operands, range, domain, parameters = {}) {
+  return Object.freeze({
+    schema: RESULT_SCHEMA,
+    operation: `rix.core.range.${operation}@1`,
+    operands: Object.freeze([...operands]),
+    parameters: Object.freeze({ ...parameters }),
+    range,
+    domain,
+    certified: true,
+    evidenceLevel: "checkedEvidence",
+    evidence: Object.freeze({
+      schema: "rix.numerics.range-evidence-node@1",
+      rule: `arith.${operation}`,
+      checkedBy: CHECKER_ID
+    })
+  });
+}
+function totalDomain() {
+  return domainRecord("allDefined");
+}
+function rangeNegate(value) {
+  const input = asRationalIntervalSet(value);
+  const range = new RationalIntervalSet(input.components.map(negateComponent));
+  return operationResult("negate", [input], range, totalDomain());
+}
+function rangeAbsoluteValue(value) {
+  const input = asRationalIntervalSet(value);
+  return operationResult("absoluteValue", [input], absoluteSet(input), totalDomain());
+}
+function rangeAdd(leftValue, rightValue) {
+  const left = asRationalIntervalSet(leftValue);
+  const right = asRationalIntervalSet(rightValue);
+  const components = [];
+  for (const a of left.components) {
+    for (const b of right.components)
+      components.push(addComponents(a, b));
+  }
+  return operationResult("add", [left, right], new RationalIntervalSet(components), totalDomain());
+}
+function rangeSubtract(leftValue, rightValue) {
+  const left = asRationalIntervalSet(leftValue);
+  const right = asRationalIntervalSet(rightValue);
+  const negated = new RationalIntervalSet(right.components.map(negateComponent));
+  const components = [];
+  for (const a of left.components) {
+    for (const b of negated.components)
+      components.push(addComponents(a, b));
+  }
+  return operationResult("subtract", [left, right], new RationalIntervalSet(components), totalDomain());
+}
+function rangeMultiply(leftValue, rightValue) {
+  const left = asRationalIntervalSet(leftValue);
+  const right = asRationalIntervalSet(rightValue);
+  return operationResult("multiply", [left, right], multiplySets(left, right), totalDomain());
+}
+function rangeReciprocal(value) {
+  const input = asRationalIntervalSet(value);
+  const definedInput = withoutZero(input);
+  const hasExcludedZero = input.containsValue(ZERO);
+  const exclusions = hasExcludedZero ? [{ reason: "divisionByZero", operand: 1, excludedSet: RationalIntervalSet.point(ZERO) }] : [];
+  const domain = domainRecord(unaryCoverage(input, definedInput), {
+    definedInput,
+    exclusions
+  });
+  return operationResult("reciprocal", [input], reciprocalSet(definedInput), domain);
+}
+function rangeDivide(leftValue, rightValue) {
+  const left = asRationalIntervalSet(leftValue);
+  const right = asRationalIntervalSet(rightValue);
+  const definedRight = withoutZero(right);
+  let coverage = "allDefined";
+  if (!left.isEmpty && !right.isEmpty && right.containsValue(ZERO)) {
+    coverage = definedRight.isEmpty ? "noDefinedInputs" : "partiallyDefined";
+  }
+  const exclusions = coverage === "allDefined" ? [] : [{ reason: "divisionByZero", operand: 2, excludedSet: RationalIntervalSet.point(ZERO) }];
+  const domain = domainRecord(coverage, { exclusions });
+  const range = multiplySets(left, reciprocalSet(definedRight));
+  return operationResult("divide", [left, right], range, domain);
+}
+function rangeIntegerPower(value, exponentValue, options = {}) {
+  const input = asRationalIntervalSet(value);
+  const exponent = exactInteger(exponentValue);
+  const zeroPowerZero = options.zeroPowerZero ?? "undefined";
+  if (zeroPowerZero !== "undefined" && zeroPowerZero !== "one") {
+    throw new TypeError("zeroPowerZero must be 'undefined' or 'one'");
+  }
+  if (exponent > 0n) {
+    return operationResult("integerPower", [input], positiveIntegerPowerSet(input, exponent), totalDomain(), { exponent, zeroPowerZero });
+  }
+  if (exponent === 0n && zeroPowerZero === "one") {
+    const range = input.isEmpty ? RationalIntervalSet.empty : RationalIntervalSet.point(ONE);
+    return operationResult("integerPower", [input], range, totalDomain(), { exponent, zeroPowerZero });
+  }
+  const definedInput = withoutZero(input);
+  const hasExcludedZero = input.containsValue(ZERO);
+  const exclusions = hasExcludedZero ? [{
+    reason: exponent === 0n ? "zeroPowerZero" : "zeroToNegativePower",
+    operand: 1,
+    excludedSet: RationalIntervalSet.point(ZERO)
+  }] : [];
+  const domain = domainRecord(unaryCoverage(input, definedInput), {
+    definedInput,
+    exclusions
+  });
+  let range;
+  if (exponent === 0n) {
+    range = definedInput.isEmpty ? RationalIntervalSet.empty : RationalIntervalSet.point(ONE);
+  } else {
+    range = reciprocalSet(positiveIntegerPowerSet(definedInput, -exponent));
+  }
+  return operationResult("integerPower", [input], range, domain, { exponent, zeroPowerZero });
+}
+function operationName(value) {
+  const match = /^rix\.core\.range\.([A-Za-z]+)@1$/.exec(value || "");
+  return match?.[1] ?? null;
+}
+function recompute(operation, operands, parameters) {
+  switch (operation) {
+    case "negate":
+      return rangeNegate(operands[0]);
+    case "absoluteValue":
+      return rangeAbsoluteValue(operands[0]);
+    case "add":
+      return rangeAdd(operands[0], operands[1]);
+    case "subtract":
+      return rangeSubtract(operands[0], operands[1]);
+    case "multiply":
+      return rangeMultiply(operands[0], operands[1]);
+    case "reciprocal":
+      return rangeReciprocal(operands[0]);
+    case "divide":
+      return rangeDivide(operands[0], operands[1]);
+    case "integerPower":
+      return rangeIntegerPower(operands[0], parameters.exponent, { zeroPowerZero: parameters.zeroPowerZero });
+    default:
+      return null;
+  }
+}
+function sameExclusions(left, right) {
+  if (left.length !== right.length)
+    return false;
+  return left.every((entry, index) => {
+    const other = right[index];
+    return entry.reason === other.reason && entry.operand === other.operand && entry.excludedSet.equals(other.excludedSet);
+  });
+}
+function checkRangeOperationResult(candidate, expected = {}) {
+  if (!candidate || candidate.schema !== RESULT_SCHEMA) {
+    return Object.freeze({ accepted: false, reason: "unsupportedSchema", checkedBy: CHECKER_ID });
+  }
+  const operation = expected.operation ?? operationName(candidate.operation);
+  const operands = expected.operands ?? candidate.operands;
+  const parameters = expected.parameters ?? candidate.parameters ?? {};
+  const recomputed = recompute(operation, operands, parameters);
+  if (!recomputed) {
+    return Object.freeze({ accepted: false, reason: "unsupportedRule", checkedBy: CHECKER_ID });
+  }
+  const accepted = candidate.range instanceof RationalIntervalSet && candidate.range.equals(recomputed.range) && candidate.domain?.coverage === recomputed.domain.coverage && sameExclusions(candidate.domain?.exclusions || [], recomputed.domain.exclusions);
+  return Object.freeze({
+    accepted,
+    reason: accepted ? null : "claimMismatch",
+    checkedBy: CHECKER_ID,
+    operation,
+    domainCoverage: recomputed.domain.coverage
+  });
+}
+var RANGE_OPERATION_RESULT_SCHEMA = RESULT_SCHEMA;
+var RANGE_ARITHMETIC_CHECKER_ID = CHECKER_ID;
 
 // ../../packages/core/src/fraction.js
 class Fraction {
   #numerator;
   #denominator;
+  static DEFAULT_STERN_BROCOT_PATH_LIMIT = 500;
   constructor(numerator, denominator = 1n, options = {}) {
     if (typeof numerator === "string") {
       const parts = numerator.trim().split("/");
       if (parts.length === 1) {
         this.#numerator = BigInt(parts[0]);
-        this.#denominator = BigInt(denominator);
+        this.#denominator = toExactBigInt(denominator, "Fraction denominator");
       } else if (parts.length === 2) {
         this.#numerator = BigInt(parts[0]);
         this.#denominator = BigInt(parts[1]);
@@ -1921,14 +3336,17 @@ class Fraction {
         throw new Error("Invalid fraction format. Use 'a/b' or 'a'");
       }
     } else {
-      this.#numerator = BigInt(numerator);
-      this.#denominator = BigInt(denominator);
+      this.#numerator = toExactBigInt(numerator, "Fraction numerator");
+      this.#denominator = toExactBigInt(denominator, "Fraction denominator");
     }
     if (this.#denominator === 0n) {
-      if (options.allowInfinite && (this.#numerator === 1n || this.#numerator === -1n)) {
+      if (this.#numerator === 0n) {
+        throw new Error("The indeterminate fraction 0/0 is not allowed");
+      }
+      if (options.allowInfinite) {
         this._isInfinite = true;
       } else {
-        throw new Error("Denominator cannot be zero");
+        throw new Error("Denominator cannot be zero unless allowInfinite is true");
       }
     } else {
       this._isInfinite = false;
@@ -1943,29 +3361,34 @@ class Fraction {
   get isInfinite() {
     return this._isInfinite || false;
   }
+  static #fromComponents(numerator, denominator) {
+    return new Fraction(numerator, denominator, {
+      allowInfinite: denominator === 0n
+    });
+  }
   add(other) {
     if (this.#denominator !== other.denominator) {
       throw new Error("Addition only supported for equal denominators");
     }
-    return new Fraction(this.#numerator + other.numerator, this.#denominator);
+    return Fraction.#fromComponents(this.#numerator + other.numerator, this.#denominator);
   }
   subtract(other) {
     if (this.#denominator !== other.denominator) {
       throw new Error("Subtraction only supported for equal denominators");
     }
-    return new Fraction(this.#numerator - other.numerator, this.#denominator);
+    return Fraction.#fromComponents(this.#numerator - other.numerator, this.#denominator);
   }
   multiply(other) {
-    return new Fraction(this.#numerator * other.numerator, this.#denominator * other.denominator);
+    return Fraction.#fromComponents(this.#numerator * other.numerator, this.#denominator * other.denominator);
   }
   divide(other) {
     if (other.numerator === 0n) {
       throw new Error("Division by zero");
     }
-    return new Fraction(this.#numerator * other.denominator, this.#denominator * other.numerator);
+    return Fraction.#fromComponents(this.#numerator * other.denominator, this.#denominator * other.numerator);
   }
   pow(exponent) {
-    const n = BigInt(exponent);
+    const n = toExactBigInt(exponent, "Exponent");
     if (n === 0n) {
       if (this.#numerator === 0n) {
         throw new Error("Zero cannot be raised to the power of zero");
@@ -1976,13 +3399,13 @@ class Fraction {
       throw new Error("Zero cannot be raised to a negative power");
     }
     if (n < 0n) {
-      return new Fraction(this.#denominator ** -n, this.#numerator ** -n);
+      return Fraction.#fromComponents(this.#denominator ** -n, this.#numerator ** -n);
     }
-    return new Fraction(this.#numerator ** n, this.#denominator ** n);
+    return Fraction.#fromComponents(this.#numerator ** n, this.#denominator ** n);
   }
   scale(factor) {
-    const scaleFactor = BigInt(factor);
-    return new Fraction(this.#numerator * scaleFactor, this.#denominator * scaleFactor);
+    const scaleFactor = toExactBigInt(factor, "Fraction scale factor");
+    return Fraction.#fromComponents(this.#numerator * scaleFactor, this.#denominator * scaleFactor);
   }
   static #gcd(a, b) {
     a = a < 0n ? -a : a;
@@ -1994,7 +3417,55 @@ class Fraction {
     }
     return a;
   }
+  static #compareValues(left, right) {
+    if (left.isInfinite && right.isInfinite) {
+      const leftSign = left.numerator < 0n ? -1 : 1;
+      const rightSign = right.numerator < 0n ? -1 : 1;
+      return leftSign < rightSign ? -1 : leftSign > rightSign ? 1 : 0;
+    }
+    if (left.isInfinite) {
+      return left.numerator < 0n ? -1 : 1;
+    }
+    if (right.isInfinite) {
+      return right.numerator < 0n ? 1 : -1;
+    }
+    let leftNumerator = left.numerator;
+    let leftDenominator = left.denominator;
+    let rightNumerator = right.numerator;
+    let rightDenominator = right.denominator;
+    if (leftDenominator < 0n) {
+      leftNumerator = -leftNumerator;
+      leftDenominator = -leftDenominator;
+    }
+    if (rightDenominator < 0n) {
+      rightNumerator = -rightNumerator;
+      rightDenominator = -rightDenominator;
+    }
+    const leftProduct = leftNumerator * rightDenominator;
+    const rightProduct = rightNumerator * leftDenominator;
+    return leftProduct < rightProduct ? -1 : leftProduct > rightProduct ? 1 : 0;
+  }
+  static #modInverse(value, modulus) {
+    let oldR = (value % modulus + modulus) % modulus;
+    let r = modulus;
+    let oldS = 1n;
+    let s = 0n;
+    while (r !== 0n) {
+      const quotient = oldR / r;
+      [oldR, r] = [r, oldR - quotient * r];
+      [oldS, s] = [s, oldS - quotient * s];
+    }
+    if (oldR !== 1n) {
+      throw new Error("A modular inverse does not exist");
+    }
+    return (oldS % modulus + modulus) % modulus;
+  }
   reduce() {
+    if (this.isInfinite) {
+      return new Fraction(this.#numerator < 0n ? -1n : 1n, 0n, {
+        allowInfinite: true
+      });
+    }
     if (this.#numerator === 0n) {
       return new Fraction(0, 1);
     }
@@ -2004,12 +3475,15 @@ class Fraction {
     if (reducedDen < 0n) {
       return new Fraction(-reducedNum, -reducedDen);
     }
-    return new Fraction(reducedNum, reducedDen);
+    return Fraction.#fromComponents(reducedNum, reducedDen);
   }
   static mediant(a, b) {
-    return new Fraction(a.numerator + b.numerator, a.denominator + b.denominator);
+    return a.mediant(b);
   }
   toRational() {
+    if (this.isInfinite) {
+      throw new Error("Cannot convert an infinite Fraction to Rational");
+    }
     return new Rational(this.#numerator, this.#denominator);
   }
   static fromRational(rational) {
@@ -2025,34 +3499,33 @@ class Fraction {
     return this.#numerator === other.numerator && this.#denominator === other.denominator;
   }
   lessThan(other) {
-    const leftSide = this.#numerator * other.denominator;
-    const rightSide = this.#denominator * other.numerator;
-    return leftSide < rightSide;
+    return Fraction.#compareValues(this, other) < 0;
   }
   lessThanOrEqual(other) {
-    const leftSide = this.#numerator * other.denominator;
-    const rightSide = this.#denominator * other.numerator;
-    return leftSide <= rightSide;
+    return Fraction.#compareValues(this, other) <= 0;
   }
   greaterThan(other) {
-    const leftSide = this.#numerator * other.denominator;
-    const rightSide = this.#denominator * other.numerator;
-    return leftSide > rightSide;
+    return Fraction.#compareValues(this, other) > 0;
   }
   greaterThanOrEqual(other) {
-    const leftSide = this.#numerator * other.denominator;
-    const rightSide = this.#denominator * other.numerator;
-    return leftSide >= rightSide;
+    return Fraction.#compareValues(this, other) >= 0;
   }
   E(exponent) {
-    const exp = BigInt(exponent);
+    const exp = toExactBigInt(exponent, "Exponent");
     if (exp >= 0n) {
       const newNumerator = this.#numerator * 10n ** exp;
-      return new Fraction(newNumerator, this.#denominator);
+      return Fraction.#fromComponents(newNumerator, this.#denominator);
     } else {
       const newDenominator = this.#denominator * 10n ** -exp;
-      return new Fraction(this.#numerator, newDenominator);
+      return Fraction.#fromComponents(this.#numerator, newDenominator);
     }
+  }
+  toJSON() {
+    return {
+      $ratmath: "Fraction",
+      numerator: this.#numerator.toString(),
+      denominator: this.#denominator.toString()
+    };
   }
   mediant(other) {
     if (this.isInfinite && other.isInfinite) {
@@ -2064,72 +3537,78 @@ class Fraction {
       throw new Error("Cannot compute mediant of two infinite fractions");
     }
     if (this.isInfinite || other.isInfinite) {
-      const newNum2 = this.#numerator + other.numerator;
-      const newDen2 = this.#denominator + other.denominator;
-      if (newNum2 === 0n && newDen2 === 0n) {
+      const newNum = this.#numerator + other.numerator;
+      const newDen = this.#denominator + other.denominator;
+      if (newNum === 0n && newDen === 0n) {
         throw new Error("Mediant would result in 0/0");
       }
-      return new Fraction(newNum2, newDen2);
+      return Fraction.#fromComponents(newNum, newDen);
     }
     const newNum = this.#numerator + other.numerator;
     const newDen = this.#denominator + other.denominator;
-    return new Fraction(newNum, newDen);
+    return Fraction.#fromComponents(newNum, newDen);
   }
   fareyParents() {
     if (this.isInfinite) {
       throw new Error("Cannot find Farey parents of infinite fraction");
     }
-    if (this.#numerator === 0n && this.#denominator === 1n) {
-      const left = new Fraction(-1n, 0n, { allowInfinite: true });
-      const right = new Fraction(1n, 0n, { allowInfinite: true });
-      return { left, right };
-    }
-    let leftBound = new Fraction(-1n, 0n, { allowInfinite: true });
-    let rightBound = new Fraction(1n, 0n, { allowInfinite: true });
-    let current = new Fraction(0n, 1n);
-    while (!current.equals(this)) {
-      if (this.lessThan(current)) {
-        rightBound = current;
-        current = leftBound.mediant(current);
-      } else {
-        leftBound = current;
-        current = current.mediant(rightBound);
+    const normalizedNumerator = this.#denominator < 0n ? -this.#numerator : this.#numerator;
+    const normalizedDenominator = this.#denominator < 0n ? -this.#denominator : this.#denominator;
+    const scale = Fraction.#gcd(normalizedNumerator, normalizedDenominator);
+    const reducedNumerator = normalizedNumerator / scale;
+    const reducedDenominator = normalizedDenominator / scale;
+    if (reducedNumerator === 0n) {
+      if (scale === 1n) {
+        return {
+          left: new Fraction(-1n, 0n, { allowInfinite: true }),
+          right: new Fraction(1n, 0n, { allowInfinite: true })
+        };
       }
+      const leftDenominator = scale / 2n;
+      return {
+        left: new Fraction(-1n, leftDenominator),
+        right: new Fraction(1n, scale - leftDenominator)
+      };
     }
-    return { left: leftBound, right: rightBound };
-  }
-  _extendedGcd(a, b) {
-    if (b === 0n) {
-      return { gcd: a, x: 1n, y: 0n };
+    let leftNumerator;
+    let leftDenominator;
+    let rightNumerator;
+    let rightDenominator;
+    if (reducedDenominator === 1n) {
+      if (reducedNumerator > 0n) {
+        leftNumerator = reducedNumerator - 1n;
+        leftDenominator = 1n;
+        rightNumerator = 1n;
+        rightDenominator = 0n;
+      } else {
+        leftNumerator = -1n;
+        leftDenominator = 0n;
+        rightNumerator = reducedNumerator + 1n;
+        rightDenominator = 1n;
+      }
+    } else {
+      leftDenominator = Fraction.#modInverse(reducedNumerator, reducedDenominator);
+      leftNumerator = (reducedNumerator * leftDenominator - 1n) / reducedDenominator;
+      rightNumerator = reducedNumerator - leftNumerator;
+      rightDenominator = reducedDenominator - leftDenominator;
     }
-    const result = this._extendedGcd(b, a % b);
-    const x = result.y;
-    const y = result.x - a / b * result.y;
-    return { gcd: result.gcd, x, y };
+    let leftCopies = (scale * reducedDenominator - 2n * leftDenominator + reducedDenominator) / (2n * reducedDenominator);
+    if (leftCopies < 0n) {
+      leftCopies = 0n;
+    } else if (leftCopies > scale - 1n) {
+      leftCopies = scale - 1n;
+    }
+    const rightCopies = scale - 1n - leftCopies;
+    return {
+      left: Fraction.#fromComponents(leftNumerator + leftCopies * reducedNumerator, leftDenominator + leftCopies * reducedDenominator),
+      right: Fraction.#fromComponents(rightNumerator + rightCopies * reducedNumerator, rightDenominator + rightCopies * reducedDenominator)
+    };
   }
   static mediantPartner(endpoint, mediant) {
-    if (endpoint.isInfinite || mediant.isInfinite) {
-      throw new Error("Cannot compute mediant partner with infinite fractions");
-    }
-    const p = endpoint.numerator;
-    const q = endpoint.denominator;
-    const a = mediant.numerator;
-    const b = mediant.denominator;
-    const s = 1n;
-    const numerator = a * (q + s) - b * p;
-    if (numerator % b !== 0n) {
-      const r2 = a * 2n - p;
-      const s_calculated = b * 2n - q;
-      return new Fraction(r2, s_calculated);
-    }
-    const r = numerator / b;
-    return new Fraction(r, s);
+    return Fraction.#fromComponents(mediant.numerator - endpoint.numerator, mediant.denominator - endpoint.denominator);
   }
   static isMediantTriple(left, mediant, right) {
     if (mediant.isInfinite) {
-      return false;
-    }
-    if (left.isInfinite && right.isInfinite) {
       return false;
     }
     try {
@@ -2143,15 +3622,12 @@ class Fraction {
     if (!Fraction.isMediantTriple(left, mediant, right)) {
       return false;
     }
-    if (!left.isInfinite && !right.isInfinite) {
-      const a = left.numerator;
-      const b = left.denominator;
-      const c = right.numerator;
-      const d = right.denominator;
-      const determinant = a * d - b * c;
-      return determinant === 1n || determinant === -1n;
+    if (mediant.numerator === 0n && mediant.denominator === 1n && left.denominator === 0n && right.denominator === 0n) {
+      return left.numerator === -1n && right.numerator === 1n || left.numerator === 1n && right.numerator === -1n;
     }
-    return left.isInfinite || right.isInfinite;
+    const determinant = left.numerator * right.denominator - left.denominator * right.numerator;
+    const magnitude = determinant < 0n ? -determinant : determinant;
+    return magnitude === Fraction.#gcd(mediant.numerator, mediant.denominator);
   }
   sternBrocotParent() {
     if (this.isInfinite) {
@@ -2179,7 +3655,10 @@ class Fraction {
       right: Fraction.fromSternBrocotPath(rightPath)
     };
   }
-  sternBrocotPath() {
+  sternBrocotPath(maxLength = Fraction.DEFAULT_STERN_BROCOT_PATH_LIMIT) {
+    if (!Number.isSafeInteger(maxLength) || maxLength < 0) {
+      throw new RangeError("Stern-Brocot path limit must be a nonnegative safe integer");
+    }
     if (this.isInfinite) {
       throw new Error("Infinite fractions don't have tree paths");
     }
@@ -2201,7 +3680,7 @@ class Fraction {
         left = current;
         current = current.mediant(right);
       }
-      if (path.length > 500) {
+      if (path.length > maxLength) {
         throw new Error("Stern-Brocot path too long - this may indicate a bug in the algorithm");
       }
     }
@@ -2357,28 +3836,45 @@ class FractionInterval {
     const newHigh = this.#high.E(exponent);
     return new FractionInterval(newLow, newHigh);
   }
+  toJSON() {
+    return { $ratmath: "FractionInterval", low: this.#low, high: this.#high };
+  }
 }
 
 // ../../packages/core/src/integer.js
+function integerDivisor(other, zeroMessage) {
+  if (!(other instanceof Integer)) {
+    throw new TypeError("Floor division and modulo require an Integer divisor");
+  }
+  if (other.value === 0n)
+    throw new Error(zeroMessage);
+  return other.value;
+}
+
 class Integer {
   #value;
   static zero = new Integer(0);
   static one = new Integer(1);
   constructor(value) {
-    if (typeof value === "string") {
+    if (value instanceof Integer) {
+      this.#value = value.value;
+    } else if (typeof value === "string") {
       const trimmed = value.trim();
       if (!/^-?\d+$/.test(trimmed)) {
         throw new Error("Invalid integer format. Must be a whole number");
       }
       this.#value = BigInt(trimmed);
     } else {
-      this.#value = BigInt(value);
+      this.#value = toExactBigInt(value, "Integer value");
     }
   }
   get value() {
     return this.#value;
   }
   add(other) {
+    if (other?.isCertifiedApproximation === true) {
+      return other._operateExactLeft("add", this);
+    }
     if (other instanceof Integer) {
       return new Integer(this.#value + other.value);
     } else if (other instanceof Rational) {
@@ -2394,6 +3890,9 @@ class Integer {
     }
   }
   subtract(other) {
+    if (other?.isCertifiedApproximation === true) {
+      return other._operateExactLeft("subtract", this);
+    }
     if (other instanceof Integer) {
       return new Integer(this.#value - other.value);
     } else if (other instanceof Rational) {
@@ -2409,6 +3908,9 @@ class Integer {
     }
   }
   multiply(other) {
+    if (other?.isCertifiedApproximation === true) {
+      return other._operateExactLeft("multiply", this);
+    }
     if (other instanceof Integer) {
       return new Integer(this.#value * other.value);
     } else if (other instanceof Rational) {
@@ -2424,6 +3926,9 @@ class Integer {
     }
   }
   divide(other) {
+    if (other?.isCertifiedApproximation === true) {
+      return other._operateExactLeft("divide", this);
+    }
     if (other instanceof Integer) {
       if (other.value === 0n) {
         throw new Error("Division by zero");
@@ -2445,6 +3950,47 @@ class Integer {
       throw new Error(`Cannot divide Integer by ${other.constructor.name}`);
     }
   }
+  possibleRelationsTo(other) {
+    const point = new Rational(this.#value, 1n);
+    if (other?.isCertifiedApproximation === true)
+      other = other.enclosure;
+    if (other instanceof Integer)
+      return this.#value < other.value ? 1 : this.#value > other.value ? 4 : 2;
+    if (other instanceof Rational)
+      return point.lessThan(other) ? 1 : point.greaterThan(other) ? 4 : 2;
+    if (other?.low && other?.high) {
+      let mask = 0;
+      if (point.lessThan(other.high))
+        mask |= 1;
+      if (other.low.lessThanOrEqual(point) && point.lessThanOrEqual(other.high))
+        mask |= 2;
+      if (point.greaterThan(other.low))
+        mask |= 4;
+      return mask;
+    }
+    throw new TypeError("Possible relations require a Core numeric value");
+  }
+  floorDivide(other) {
+    const divisor = integerDivisor(other, "Division by zero");
+    const quotient = this.#value / divisor;
+    const remainder = this.#value % divisor;
+    return new Integer(remainder !== 0n && remainder < 0n !== divisor < 0n ? quotient - 1n : quotient);
+  }
+  floorModulo(other) {
+    const divisor = integerDivisor(other, "Modulo by zero");
+    const remainder = this.#value % divisor;
+    return new Integer(remainder !== 0n && remainder < 0n !== divisor < 0n ? remainder + divisor : remainder);
+  }
+  divmod(other) {
+    const divisor = integerDivisor(other, "Division by zero");
+    let quotient = this.#value / divisor;
+    let remainder = this.#value % divisor;
+    if (remainder !== 0n && remainder < 0n !== divisor < 0n) {
+      quotient -= 1n;
+      remainder += divisor;
+    }
+    return [new Integer(quotient), new Integer(remainder)];
+  }
   modulo(other) {
     if (other.value === 0n) {
       throw new Error("Modulo by zero");
@@ -2455,7 +4001,7 @@ class Integer {
     return new Integer(-this.#value);
   }
   pow(exponent) {
-    const exp = exponent instanceof Integer ? exponent.value : BigInt(exponent);
+    const exp = exponent instanceof Integer ? exponent.value : toExactBigInt(exponent, "Exponent");
     if (exp === 0n) {
       if (this.#value === 0n) {
         throw new Error("Zero cannot be raised to the power of zero");
@@ -2470,39 +4016,46 @@ class Integer {
       const positiveResult = this.pow(positiveExp);
       return new Rational(1, positiveResult.value);
     }
-    let result = 1n;
-    let base = this.#value;
-    let n = exp;
-    while (n > 0n) {
-      if (n & 1n) {
-        result *= base;
-      }
-      base *= base;
-      n >>= 1n;
-    }
-    return new Integer(result);
+    return new Integer(this.#value ** exp);
   }
   equals(other) {
-    return this.#value === other.value;
+    if (other instanceof Rational) {
+      return other.denominator === 1n && this.#value === other.numerator;
+    }
+    return this.#value === other?.value;
   }
   compareTo(other) {
-    if (this.#value < other.value)
+    const order = this.#order(other);
+    return Number.isNaN(order) ? 0 : order;
+  }
+  #order(other) {
+    let left = this.#value;
+    let right;
+    if (other instanceof Rational) {
+      left *= other.denominator;
+      right = other.numerator;
+    } else if (typeof other?.value === "bigint") {
+      right = other.value;
+    } else {
+      return NaN;
+    }
+    if (left < right)
       return -1;
-    if (this.#value > other.value)
+    if (left > right)
       return 1;
     return 0;
   }
   lessThan(other) {
-    return this.#value < other.value;
+    return this.#order(other) < 0;
   }
   lessThanOrEqual(other) {
-    return this.#value <= other.value;
+    return this.#order(other) <= 0;
   }
   greaterThan(other) {
-    return this.#value > other.value;
+    return this.#order(other) > 0;
   }
   greaterThanOrEqual(other) {
-    return this.#value >= other.value;
+    return this.#order(other) >= 0;
   }
   abs() {
     return this.#value < 0n ? this.negate() : new Integer(this.#value);
@@ -2587,7 +4140,7 @@ class Integer {
     return new Integer(rational.numerator);
   }
   E(exponent) {
-    const exp = BigInt(exponent);
+    const exp = toExactBigInt(exponent, "Exponent");
     if (exp >= 0n) {
       const newValue = this.#value * 10n ** exp;
       return new Integer(newValue);
@@ -2628,3674 +4181,1700 @@ class Integer {
       return 0;
     return this.#value < 0n ? (-this.#value).toString(2).length : this.#value.toString(2).length;
   }
+  toJSON() {
+    return { $ratmath: "Integer", value: this.#value.toString() };
+  }
 }
 
-// ../../packages/reals/src/index.js
-var LN2_CF = [0, 1, 2, 3, 1, 6, 3, 1, 1, 2, 1, 1, 6, 1, 6, 1, 1, 4, 1, 2, 4, 1, 1, 1, 1, 1, 1, 1, 3, 1, 1, 1, 2, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
-var PI_CF = [3, 7, 15, 1, 292, 1, 1, 1, 2, 1, 3, 1, 14, 2, 1, 1, 2, 2, 2, 2, 1, 84, 2, 1, 1, 15, 3, 13, 1, 4, 2, 6, 6, 99, 1, 2, 2, 6, 3, 5, 1, 1, 6, 8, 1, 7, 1, 2, 3, 7, 1, 2, 1, 1, 12, 1, 1, 1, 3, 1, 1, 8, 1, 1, 2, 1, 6];
-var E_CF = [2, 1, 2, 1, 1, 4, 1, 1, 6, 1, 1, 8, 1, 1, 10, 1, 1, 12, 1, 1, 14, 1, 1, 16, 1, 1, 18, 1, 1, 20, 1, 1, 22, 1, 1, 24, 1, 1, 26, 1, 1, 28, 1, 1, 30, 1, 1, 32, 1, 1, 34, 1, 1, 36, 1, 1, 38, 1, 1, 40];
-function continuedFractionApproximation(coefficients, terms) {
-  if (terms === 0 || coefficients.length === 0) {
-    return new Rational(0);
-  }
-  let num = new Integer(1);
-  let den = new Integer(0);
-  for (let i = Math.min(terms, coefficients.length) - 1;i >= 0; i--) {
-    [num, den] = [den.add(num.multiply(new Integer(coefficients[i]))), num];
-  }
-  return new Rational(num.value, den.value);
+// ../../packages/core/src/certified-approximation.js
+var Relation = Object.freeze({
+  LESS: 1,
+  EQUAL: 2,
+  GREATER: 4
+});
+function asRational2(value, label = "value") {
+  if (value instanceof Rational)
+    return value;
+  if (value instanceof Integer)
+    return value.toRational();
+  throw new TypeError(`${label} must be an Integer or Rational`);
 }
-function isZero(rational) {
-  return rational.numerator === 0n;
+function exactScalar(value) {
+  const rational = asRational2(value);
+  return rational.denominator === 1n ? new Integer(rational.numerator) : rational;
 }
-function isNegative(rational) {
-  return rational.numerator < 0n;
+function pointInterval(value) {
+  const rational = asRational2(value);
+  return new RationalInterval(rational, rational);
 }
-function floor(rational) {
-  if (rational.denominator === 1n) {
-    return new Rational(rational.numerator);
+function freezeRepresentation(value) {
+  if (value === null || value === undefined)
+    return null;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Approximation representation must be an object");
   }
-  const quotient = rational.numerator / rational.denominator;
-  const remainder = rational.numerator % rational.denominator;
-  if (remainder === 0n || rational.numerator >= 0n) {
-    return new Rational(quotient);
-  } else {
-    return new Rational(quotient - 1n);
+  const copy = { ...value };
+  if (Array.isArray(copy.certifiedPrefix)) {
+    copy.certifiedPrefix = Object.freeze([...copy.certifiedPrefix]);
   }
+  if (Array.isArray(copy.provisionalSuffix)) {
+    copy.provisionalSuffix = Object.freeze([...copy.provisionalSuffix]);
+  }
+  if (copy.presentationHint && typeof copy.presentationHint === "object") {
+    copy.presentationHint = Object.freeze({ ...copy.presentationHint });
+  }
+  if (copy.requested && typeof copy.requested === "object") {
+    copy.requested = Object.freeze({ ...copy.requested });
+  }
+  if (copy.achieved && typeof copy.achieved === "object") {
+    copy.achieved = Object.freeze({ ...copy.achieved });
+  }
+  return Object.freeze(copy);
 }
-function round(rational) {
-  if (rational.denominator === 1n) {
-    return new Rational(rational.numerator);
-  }
-  const wholePart = floor(rational);
-  const fractionalPart = rational.subtract(wholePart);
-  const half = new Rational(1, 2);
-  if (fractionalPart.compareTo(half) >= 0) {
-    return wholePart.add(new Rational(1));
-  } else {
-    return wholePart;
-  }
+function isPoint(interval) {
+  return interval.low.equals(interval.high);
 }
-function parsePrecision(precision) {
-  if (precision === undefined) {
-    return { epsilon: new Rational(1, 1e6), negative: true };
+function normalize(candidate, enclosure, options = {}) {
+  if (isPoint(enclosure) && options.preserveWrapper !== true) {
+    return exactScalar(enclosure.low);
   }
-  if (precision < 0) {
-    const denominator = new Integer(10).pow(-precision);
-    return { epsilon: new Rational(1, denominator.value), negative: true };
-  } else {
-    return { epsilon: new Rational(1, precision), negative: false };
-  }
+  return new CertifiedApproximation(candidate, enclosure, options);
 }
-function createTightRationalInterval(value, precision) {
-  const { epsilon } = parsePrecision(precision);
-  const epsilonDecimal = epsilon.toNumber();
-  const lowerDecimal = value - epsilonDecimal;
-  const upperDecimal = value + epsilonDecimal;
-  const precisionScale = Math.min(1e9, Math.max(1e6, Math.ceil(1 / epsilonDecimal)));
-  const lower = new Rational(Math.floor(lowerDecimal * precisionScale), precisionScale);
-  const upper = new Rational(Math.ceil(upperDecimal * precisionScale), precisionScale);
-  return new RationalInterval(lower, upper);
+function operand(value) {
+  if (value instanceof CertifiedApproximation) {
+    return { candidate: value.candidate, enclosure: value.enclosure, approximation: true };
+  }
+  if (value instanceof RationalInterval) {
+    return { candidate: null, enclosure: value, intervalCollection: true };
+  }
+  if (value instanceof Integer || value instanceof Rational) {
+    return { candidate: value, enclosure: pointInterval(value), exact: true };
+  }
+  return null;
 }
-function getConstant(cfCoefficients, precision) {
-  const { epsilon } = parsePrecision(precision);
-  let terms = 2;
-  let prev = continuedFractionApproximation(cfCoefficients, terms - 1);
-  let curr = continuedFractionApproximation(cfCoefficients, terms);
-  while (terms < cfCoefficients.length && curr.subtract(prev).abs().compareTo(epsilon) > 0) {
-    terms++;
-    prev = curr;
-    curr = continuedFractionApproximation(cfCoefficients, terms);
-  }
-  const lower = prev.compareTo(curr) < 0 ? prev : curr;
-  const upper = prev.compareTo(curr) > 0 ? prev : curr;
-  return new RationalInterval(lower, upper);
+function presentationHint(value) {
+  const rep = value?.representation;
+  if (rep?.kind !== "radix")
+    return null;
+  const certified = String(rep.certifiedPrefix ?? "");
+  const dot = certified.indexOf(".");
+  return {
+    base: rep.base,
+    characters: rep.characters,
+    certifiedFractionalDigits: dot === -1 ? 0 : certified.length - dot - 1,
+    provisionalDigits: String(rep.provisionalSuffix ?? "").length
+  };
 }
-var PI = (precision) => getConstant(PI_CF, precision);
-var E = (precision) => getConstant(E_CF, precision);
-function EXP(x, precision) {
-  if (x === undefined) {
-    return E(precision);
-  }
-  const { epsilon } = parsePrecision(precision);
-  if (x instanceof RationalInterval) {
-    const lower = EXP(x.low, precision);
-    const upper = EXP(x.high, precision);
-    return new RationalInterval(lower.low, upper.high);
-  }
-  if (!(x instanceof Rational)) {
-    x = new Rational(x);
-  }
-  if (isZero(x)) {
-    return new RationalInterval(new Rational(1), new Rational(1));
-  }
-  const ln2Interval = getConstant(LN2_CF, precision);
-  const ln2Approx = ln2Interval.low.add(ln2Interval.high).divide(new Rational(2));
-  const k = floor(x.divide(ln2Approx));
-  const r = x.subtract(k.multiply(ln2Approx));
-  if (isNegative(r)) {
-    const kAdjusted = k.subtract(new Rational(1));
-    const rAdjusted = x.subtract(kAdjusted.multiply(ln2Approx));
-    return EXP(rAdjusted, precision).multiply(new Rational(new Integer(2).pow(kAdjusted.numerator >= 0n ? kAdjusted.numerator : -kAdjusted.numerator).value, 1));
-  }
-  let expR;
-  let sum = new Rational(1);
-  let term = new Rational(1);
-  let n = 1;
-  let converged = false;
-  while (term.abs().compareTo(epsilon) > 0 && n < 50) {
-    term = term.multiply(r).divide(new Rational(n));
-    sum = sum.add(term);
-    n++;
-    if (sum.denominator > 1000000000n || term.denominator > 1000000000n) {
-      break;
+function derivedOptions(left, right = null) {
+  const hint = presentationHint(left) ?? presentationHint(right);
+  return {
+    representation: {
+      kind: "derived",
+      reason: "derived",
+      original: null,
+      ...hint ? { presentationHint: hint } : {}
+    },
+    sourceId: Symbol("ratmath-derived-approximation"),
+    dependencies: right ? [left.sourceId, right.sourceId].filter(Boolean) : [left.sourceId].filter(Boolean)
+  };
+}
+function decimalCylinder(interval, maxDigits = 100) {
+  if (interval.low.lessThan(Rational.zero))
+    return null;
+  let scale = 1n;
+  for (let digits = 0;digits <= maxDigits; digits++) {
+    const lowNumerator = interval.low.numerator * scale;
+    const highNumerator = interval.high.numerator * scale;
+    if (lowNumerator % interval.low.denominator === 0n && highNumerator % interval.high.denominator === 0n) {
+      const lowGrid = lowNumerator / interval.low.denominator;
+      const highGrid = highNumerator / interval.high.denominator;
+      if (highGrid === lowGrid + 1n)
+        return { digits, scale, lowGrid };
     }
-    if (term.abs().compareTo(epsilon) <= 0) {
-      converged = true;
-      break;
-    }
+    scale *= 10n;
   }
-  if (converged && sum.denominator <= 1000000000n) {
-    const errorBound = term.abs().multiply(new Rational(2));
-    expR = new RationalInterval(sum.subtract(errorBound), sum.add(errorBound));
-  } else {
-    const rDecimal = r.toNumber();
-    const expRDecimal = Math.exp(rDecimal);
-    expR = createTightRationalInterval(expRDecimal, precision);
-  }
-  if (isZero(k)) {
-    return expR;
-  }
-  const twoToK = new Rational(new Integer(2).pow(k.numerator >= 0n ? k.numerator : -k.numerator).value, 1);
-  if (isNegative(k)) {
-    return expR.divide(twoToK);
-  } else {
-    return expR.multiply(twoToK);
-  }
+  return null;
 }
-function LN(x, precision) {
-  const { epsilon } = parsePrecision(precision);
-  if (x instanceof RationalInterval) {
-    if (isNegative(x.low) || isZero(x.low)) {
-      throw new Error("LN: argument must be positive");
-    }
-    const lower = LN(x.low, precision);
-    const upper = LN(x.high, precision);
-    return new RationalInterval(lower.low, upper.high);
-  }
-  if (!(x instanceof Rational)) {
-    x = new Rational(x);
-  }
-  if (isNegative(x) || isZero(x)) {
-    throw new Error("LN: argument must be positive");
-  }
-  if (x.equals(new Rational(1))) {
-    return new RationalInterval(new Rational(0), new Rational(0));
-  }
-  let k = 0;
-  let xScaled = x;
-  if (x.compareTo(new Rational(1)) > 0) {
-    while (xScaled.compareTo(new Rational(2)) >= 0) {
-      xScaled = xScaled.divide(new Rational(2));
-      k++;
-    }
-  } else {
-    while (xScaled.compareTo(new Rational(1)) < 0) {
-      xScaled = xScaled.multiply(new Rational(2));
-      k--;
-    }
-  }
-  const y = xScaled.subtract(new Rational(1));
-  let lnM;
-  let sum = new Rational(0);
-  let term = y;
-  let n = 1;
-  let converged = false;
-  while (term.abs().compareTo(epsilon) > 0 && n < 50) {
-    sum = sum.add(term.divide(new Rational(n)));
-    n++;
-    term = term.multiply(y).negate();
-    if (sum.denominator > 1000000000n || term.denominator > 1000000000n) {
-      break;
-    }
-    if (term.abs().compareTo(epsilon) <= 0) {
-      converged = true;
-      break;
-    }
-  }
-  if (converged && sum.denominator <= 1000000000n) {
-    const errorBound = term.abs().divide(new Rational(n));
-    lnM = new RationalInterval(sum.subtract(errorBound), sum.add(errorBound));
-  } else {
-    const xScaledDecimal = xScaled.toNumber();
-    const lnMDecimal = Math.log(xScaledDecimal);
-    lnM = createTightRationalInterval(lnMDecimal, precision);
-  }
-  if (k === 0) {
-    return lnM;
-  }
-  const ln2Interval = getConstant(LN2_CF, precision);
-  const kLn2 = ln2Interval.multiply(new Rational(k));
-  return lnM.add(kLn2);
+function fixedDecimalFromGrid(grid, digits) {
+  const text = grid.toString();
+  if (digits === 0)
+    return text;
+  const padded = text.padStart(digits + 1, "0");
+  return `${padded.slice(0, -digits)}.${padded.slice(-digits)}`;
 }
-function LOG(x, base = 10, precision) {
-  if (base === undefined || typeof base === "number" && base < 0) {
-    precision = base;
-    base = 10;
+function candidateFractionalDigits(value, count) {
+  const rational = asRational2(value);
+  const numerator = rational.numerator < 0n ? -rational.numerator : rational.numerator;
+  let remainder = numerator % rational.denominator;
+  let result = "";
+  for (let index = 0;index < count; index++) {
+    remainder *= 10n;
+    result += String(remainder / rational.denominator);
+    remainder %= rational.denominator;
   }
-  const lnX = LN(x, precision);
-  const lnBase = LN(new Rational(base), precision);
-  return lnX.divide(lnBase);
+  return result;
 }
-function SIN(x, precision) {
-  const { epsilon } = parsePrecision(precision);
-  if (x instanceof RationalInterval) {
-    const samples = 100;
-    let min = null, max = null;
-    for (let i = 0;i <= samples; i++) {
-      const t = x.low.add(x.high.subtract(x.low).multiply(new Rational(i)).divide(new Rational(samples)));
-      const sinT = SIN(t, precision);
-      if (min === null || sinT.low.compareTo(min) < 0)
-        min = sinT.low;
-      if (max === null || sinT.high.compareTo(max) > 0)
-        max = sinT.high;
+function serializeSourceId(sourceId) {
+  return typeof sourceId === "string" || typeof sourceId === "number" ? sourceId : null;
+}
+function relationEnclosure(value) {
+  if (value instanceof CertifiedApproximation)
+    return value.enclosure;
+  if (value instanceof RationalInterval)
+    return value;
+  if (value instanceof Integer || value instanceof Rational)
+    return pointInterval(value);
+  throw new TypeError("Possible relations require Core numeric values");
+}
+function possibleRelations(left, right) {
+  if (left instanceof CertifiedApproximation && right instanceof CertifiedApproximation && left.sameSource(right)) {
+    return Relation.EQUAL;
+  }
+  const a = relationEnclosure(left);
+  const b = relationEnclosure(right);
+  let result = 0;
+  if (a.low.lessThan(b.high))
+    result |= Relation.LESS;
+  if (a.low.lessThanOrEqual(b.high) && b.low.lessThanOrEqual(a.high)) {
+    result |= Relation.EQUAL;
+  }
+  if (a.high.greaterThan(b.low))
+    result |= Relation.GREATER;
+  return result;
+}
+
+class CertifiedApproximation {
+  #candidate;
+  #enclosure;
+  #representation;
+  #sourceId;
+  #dependencies;
+  constructor(candidate, enclosure, options = {}) {
+    if (options === null || typeof options !== "object" || Array.isArray(options)) {
+      throw new TypeError("Certified approximation options must be an object");
     }
-    return new RationalInterval(min, max);
+    if (options.dependencies !== undefined && !Array.isArray(options.dependencies)) {
+      throw new TypeError("Certified approximation dependencies must be an array");
+    }
+    if (options.sourceId !== undefined && !["string", "number", "symbol"].includes(typeof options.sourceId)) {
+      throw new TypeError("Certified approximation sourceId must be a string, number, or symbol");
+    }
+    const exactCandidate = exactScalar(candidate);
+    if (!(enclosure instanceof RationalInterval)) {
+      throw new TypeError("Certified approximation enclosure must be a RationalInterval");
+    }
+    if (!enclosure.containsValue(asRational2(exactCandidate))) {
+      throw new RangeError("Certified approximation candidate must lie in its enclosure");
+    }
+    this.#candidate = exactCandidate;
+    this.#enclosure = enclosure;
+    this.#representation = freezeRepresentation(options.representation);
+    this.#sourceId = options.sourceId ?? Symbol("ratmath-certified-approximation");
+    this.#dependencies = Object.freeze([...options.dependencies || []]);
   }
-  if (!(x instanceof Rational)) {
-    x = new Rational(x);
+  get candidate() {
+    return this.#candidate;
   }
-  const piInterval = PI(precision);
-  const piApprox = piInterval.low.add(piInterval.high).divide(new Rational(2));
-  const piOver2 = piApprox.divide(new Rational(2));
-  const k = round(x.divide(piOver2));
-  const r = x.subtract(k.multiply(piOver2));
-  const kMod4 = Number(k.numerator % 4n);
-  let usecos = false;
-  let negate = false;
-  switch (kMod4) {
-    case 0:
-      break;
-    case 1:
-      usecos = true;
-      break;
-    case 2:
-      negate = true;
-      break;
-    case 3:
-      usecos = true;
-      negate = true;
-      break;
+  get enclosure() {
+    return this.#enclosure;
   }
-  let sum = new Rational(0);
-  let term = r;
-  let n = 1;
-  if (usecos) {
-    sum = new Rational(1);
-    term = new Rational(1);
-    n = 0;
+  get representation() {
+    return this.#representation;
   }
-  while (term.abs().compareTo(epsilon) > 0 && n < 100) {
-    if (usecos) {
-      if (n > 0) {
-        term = term.multiply(r).multiply(r).negate().divide(new Rational((2 * n - 1) * (2 * n)));
-        sum = sum.add(term);
+  get sourceId() {
+    return this.#sourceId;
+  }
+  get dependencies() {
+    return this.#dependencies;
+  }
+  get low() {
+    return this.#enclosure.low;
+  }
+  get high() {
+    return this.#enclosure.high;
+  }
+  get isCertifiedApproximation() {
+    return true;
+  }
+  sameSource(other) {
+    return this === other || other instanceof CertifiedApproximation && this.#sourceId !== null && this.#sourceId !== undefined && this.#sourceId === other.sourceId;
+  }
+  copy() {
+    return new CertifiedApproximation(this.#candidate, this.#enclosure, {
+      representation: this.#representation,
+      sourceId: this.#sourceId,
+      dependencies: this.#dependencies
+    });
+  }
+  #binary(other, operation) {
+    const rhs = operand(other);
+    if (!rhs)
+      throw new TypeError(`Cannot ${operation} CertifiedApproximation and ${other?.constructor?.name ?? typeof other}`);
+    if (rhs.intervalCollection) {
+      return this.#enclosure[operation](rhs.enclosure);
+    }
+    if (rhs.approximation && this.sameSource(other)) {
+      if (operation === "subtract")
+        return Integer.zero;
+      if (operation === "divide") {
+        if (this.#enclosure.containsZero()) {
+          throw new Error("Cannot divide an approximation containing zero by itself");
+        }
+        return Integer.one;
       }
-    } else {
-      sum = sum.add(term);
-      term = term.multiply(r).multiply(r).negate().divide(new Rational((n + 1) * (n + 2)));
     }
-    n++;
-    if (sum.denominator > 100000000000n || term.denominator > 100000000000n) {
-      break;
+    const candidate = this.#candidate[operation](rhs.candidate);
+    const enclosure = this.#enclosure[operation](rhs.enclosure);
+    return normalize(candidate, enclosure, derivedOptions(this, rhs.approximation ? other : null));
+  }
+  add(other) {
+    return this.#binary(other, "add");
+  }
+  subtract(other) {
+    return this.#binary(other, "subtract");
+  }
+  multiply(other) {
+    return this.#binary(other, "multiply");
+  }
+  divide(other) {
+    return this.#binary(other, "divide");
+  }
+  _operateExactLeft(operation, left) {
+    const lhs = operand(left);
+    if (!lhs?.exact)
+      throw new TypeError("Left operand must be an exact Core scalar");
+    if (operation === "add" || operation === "multiply")
+      return this[operation](left);
+    const candidate = lhs.candidate[operation](this.#candidate);
+    const enclosure = lhs.enclosure[operation](this.#enclosure);
+    return normalize(candidate, enclosure, derivedOptions(this));
+  }
+  negate() {
+    const representation = this.#representation?.kind === "radix" ? { ...this.#representation, original: this.#representation.original ? `-${this.#representation.original}`.replace(/^--/, "") : null } : { kind: "derived", reason: "derived", original: null };
+    return normalize(this.#candidate.negate(), this.#enclosure.negate(), {
+      representation,
+      sourceId: Symbol("ratmath-derived-approximation"),
+      dependencies: [this.#sourceId]
+    });
+  }
+  reciprocal() {
+    return normalize(asRational2(this.#candidate).reciprocal(), this.#enclosure.reciprocate(), derivedOptions(this));
+  }
+  pow(exponent) {
+    return normalize(this.#candidate.pow(exponent), this.#enclosure.pow(exponent), derivedOptions(this));
+  }
+  E(exponent) {
+    return normalize(this.#candidate.E(exponent), this.#enclosure.E(exponent), derivedOptions(this));
+  }
+  possibleRelationsTo(other) {
+    return possibleRelations(this, other);
+  }
+  toRationalInterval() {
+    return this.#enclosure;
+  }
+  toRational() {
+    if (!isPoint(this.#enclosure)) {
+      throw new Error("Cannot convert a non-point CertifiedApproximation to Rational");
     }
+    return this.#enclosure.low;
   }
-  if (negate) {
-    sum = sum.negate();
+  toString() {
+    if (this.#representation?.original)
+      return this.#representation.original;
+    const entirelyNegative = this.#enclosure.high.lessThan(Rational.zero);
+    const displayEnclosure = entirelyNegative ? this.#enclosure.negate() : this.#enclosure;
+    const hint = this.#representation?.presentationHint;
+    const cylinder = hint?.base === 10 ? decimalCylinder(displayEnclosure) : null;
+    if (cylinder) {
+      const prefix = fixedDecimalFromGrid(cylinder.lowGrid, cylinder.digits);
+      const provisionalCount = hint.provisionalDigits ?? 0;
+      const displayCandidate = entirelyNegative ? this.#candidate.negate() : this.#candidate;
+      const candidateDigits = candidateFractionalDigits(displayCandidate, cylinder.digits + provisionalCount);
+      const provisional = provisionalCount > 0 ? candidateDigits.slice(cylinder.digits, cylinder.digits + provisionalCount) : "";
+      return `${entirelyNegative ? "-" : ""}${prefix}?${provisional}`;
+    }
+    const displayCandidate = entirelyNegative ? this.#candidate.negate() : this.#candidate;
+    const candidateText = displayCandidate.toString();
+    return `${entirelyNegative ? "-" : ""}${candidateText}?[=${displayEnclosure.low}:${displayEnclosure.high}]`;
   }
-  const errorBound = term.abs().multiply(new Rational(2));
-  return new RationalInterval(sum.subtract(errorBound), sum.add(errorBound));
+  toJSON() {
+    return {
+      $ratmath: "CertifiedApproximation",
+      candidate: this.#candidate,
+      enclosure: this.#enclosure,
+      representation: this.#representation,
+      sourceId: serializeSourceId(this.#sourceId),
+      dependencies: this.#dependencies.map(serializeSourceId).filter((dependency) => dependency !== null)
+    };
+  }
 }
-function COS(x, precision) {
-  const { epsilon } = parsePrecision(precision);
-  const piInterval = PI(precision);
-  const piOver2 = piInterval.divide(new Rational(2));
-  if (x instanceof RationalInterval) {
-    return SIN(x.add(piOver2), precision);
-  } else {
-    const piOver2Mid = piOver2.low.add(piOver2.high).divide(new Rational(2));
-    const xRational = x instanceof Rational ? x : new Rational(x);
-    return SIN(xRational.add(piOver2Mid), precision);
+function normalizeCertifiedApproximation(candidate, enclosure, options = {}) {
+  return normalize(candidate, enclosure, options);
+}
+function positionalRational(sign, integerDigits, fractionalDigits, baseSystem) {
+  const integer = integerDigits.length ? baseSystem.toDecimal(integerDigits) : 0n;
+  const fractional = fractionalDigits.length ? baseSystem.toDecimal(fractionalDigits) : 0n;
+  const scale = BigInt(baseSystem.base) ** BigInt(fractionalDigits.length);
+  return new Rational((sign < 0n ? -1n : 1n) * (integer * scale + fractional), scale);
+}
+function certifiedRadixPrefix({
+  integerDigits,
+  fractionalDigits = "",
+  provisionalDigits = "",
+  negative = false,
+  baseSystem = BaseSystem.DECIMAL,
+  enclosure = null,
+  original = null,
+  reason = "literal",
+  requested = null,
+  achieved = null,
+  roundingMode = null,
+  sourceId
+}) {
+  if (!(baseSystem instanceof BaseSystem))
+    throw new TypeError("baseSystem must be a BaseSystem");
+  if (!baseSystem.supportsPositionalFractions) {
+    throw new RangeError("Certified radix prefixes require a conventional positional BaseSystem");
+  }
+  if (!baseSystem.isValidString(integerDigits || "0"))
+    throw new Error("Invalid radix integer digits");
+  if (fractionalDigits && !baseSystem.isValidString(fractionalDigits))
+    throw new Error("Invalid radix fractional digits");
+  if (provisionalDigits && !baseSystem.isValidString(provisionalDigits))
+    throw new Error("Invalid provisional radix digits");
+  const sign = negative ? -1n : 1n;
+  const prefix = positionalRational(sign, integerDigits || "0", fractionalDigits, baseSystem);
+  const candidateFraction = fractionalDigits + provisionalDigits;
+  const candidate = positionalRational(sign, integerDigits || "0", candidateFraction, baseSystem);
+  const width = new Rational(1n, BigInt(baseSystem.base) ** BigInt(fractionalDigits.length));
+  const prefixHull = negative ? new RationalInterval(prefix.subtract(width), prefix) : new RationalInterval(prefix, prefix.add(width));
+  const authoritative = enclosure ?? prefixHull;
+  if (!prefixHull.contains(authoritative)) {
+    throw new RangeError("Explicit enclosure must lie inside the certified radix prefix cylinder");
+  }
+  return new CertifiedApproximation(candidate, authoritative, {
+    sourceId,
+    representation: {
+      kind: "radix",
+      base: baseSystem.base,
+      characters: baseSystem.characters.join(""),
+      certifiedPrefix: `${negative ? "-" : ""}${integerDigits || "0"}${fractionalDigits.length || provisionalDigits.length ? `.${fractionalDigits}` : ""}`,
+      provisionalSuffix: provisionalDigits,
+      original,
+      reason,
+      requested,
+      achieved: achieved ?? { fractionalDigits: fractionalDigits.length },
+      roundingMode
+    }
+  });
+}
+function certifiedContinuedFractionPrefix({
+  coefficients,
+  provisionalCoefficients = [],
+  original = null,
+  reason = "literal",
+  requested = null,
+  achieved = null,
+  sourceId
+}) {
+  const certified = coefficients.map((value) => toExactBigInt(value, "Continued-fraction coefficient"));
+  const provisional = provisionalCoefficients.map((value) => toExactBigInt(value, "Provisional continued-fraction coefficient"));
+  if (certified.length === 0)
+    throw new Error("Continued-fraction approximation requires a certified coefficient");
+  if (certified.slice(1).some((value) => value <= 0n) || provisional.some((value) => value <= 0n)) {
+    throw new Error("Continued-fraction tail coefficients must be positive");
+  }
+  const convergent = Rational.fromContinuedFraction(certified);
+  const adjacentCoefficients = [...certified];
+  adjacentCoefficients[adjacentCoefficients.length - 1] += 1n;
+  const adjacent = Rational.fromContinuedFraction(adjacentCoefficients);
+  const candidate = Rational.fromContinuedFraction([...certified, ...provisional]);
+  return new CertifiedApproximation(candidate, new RationalInterval(convergent, adjacent), {
+    sourceId,
+    representation: {
+      kind: "continuedFraction",
+      certifiedPrefix: certified.map(String),
+      provisionalSuffix: provisional.map(String),
+      original,
+      reason,
+      requested,
+      achieved: achieved ?? { terms: certified.length }
+    }
+  });
+}
+function boundedDecimalApproximation(value, options = {}) {
+  const fractionalDigits = options.fractionalDigits ?? 20;
+  if (!Number.isSafeInteger(fractionalDigits) || fractionalDigits < 0) {
+    throw new RangeError("fractionalDigits must be a nonnegative safe integer");
+  }
+  const rational = asRational2(value);
+  const negative = rational.numerator < 0n;
+  const numerator = negative ? -rational.numerator : rational.numerator;
+  const integer = numerator / rational.denominator;
+  let remainder = numerator % rational.denominator;
+  let digits = "";
+  for (let index = 0;index < fractionalDigits && remainder !== 0n; index++) {
+    remainder *= 10n;
+    digits += String(remainder / rational.denominator);
+    remainder %= rational.denominator;
+  }
+  if (remainder === 0n)
+    return exactScalar(rational);
+  const original = `${negative ? "-" : ""}${integer}.${digits}?`;
+  return certifiedRadixPrefix({
+    integerDigits: String(integer),
+    fractionalDigits: digits,
+    negative,
+    original,
+    reason: options.reason ?? "truncated",
+    requested: { fractionalDigits },
+    achieved: { fractionalDigits: digits.length }
+  });
+}
+function boundedContinuedFractionApproximation(value, options = {}) {
+  const maxTerms = options.maxTerms ?? Rational.DEFAULT_CF_LIMIT;
+  if (!Number.isSafeInteger(maxTerms) || maxTerms < 1) {
+    throw new RangeError("maxTerms must be a positive safe integer");
+  }
+  const rational = asRational2(value);
+  const coefficients = rational.toContinuedFraction({ maxTerms });
+  const extended = rational.toContinuedFraction({ maxTerms: maxTerms + 1 });
+  if (extended.length <= maxTerms)
+    return exactScalar(rational);
+  const [first, ...tail] = coefficients;
+  const original = tail.length ? `${first}.~${tail.join("~")}?` : `${first}.~?`;
+  return certifiedContinuedFractionPrefix({
+    coefficients,
+    original,
+    reason: options.reason ?? "truncated",
+    requested: { maxTerms },
+    achieved: { terms: coefficients.length }
+  });
+}
+
+// ../../packages/core/src/type-promotion.js
+class TypePromotion {
+  constructor() {
+    throw new TypeError("TypePromotion is a static utility class");
+  }
+  static getTypeLevel(value) {
+    if (value instanceof Integer)
+      return 0;
+    if (value instanceof Rational)
+      return 1;
+    if (value instanceof RationalInterval)
+      return 2;
+    if (value instanceof CertifiedApproximation) {
+      throw new Error("CertifiedApproximation is scalar uncertainty, not a linear promotion level");
+    }
+    throw new Error(`Unknown type: ${value.constructor.name}`);
+  }
+  static integerToRational(integer) {
+    return new Rational(integer.value, 1n);
+  }
+  static rationalToInterval(rational) {
+    return new RationalInterval(rational, rational);
+  }
+  static integerToInterval(integer) {
+    const rational = TypePromotion.integerToRational(integer);
+    return TypePromotion.rationalToInterval(rational);
+  }
+  static promoteToLevel(value, targetLevel) {
+    const currentLevel = TypePromotion.getTypeLevel(value);
+    if (!Number.isInteger(targetLevel) || targetLevel < 0 || targetLevel > 2) {
+      throw new Error(`Invalid target level: ${targetLevel}`);
+    }
+    if (currentLevel === targetLevel) {
+      return value;
+    }
+    if (currentLevel > targetLevel) {
+      throw new Error(`Cannot demote from level ${currentLevel} to level ${targetLevel}`);
+    }
+    let promoted = value;
+    for (let level = currentLevel;level < targetLevel; level++) {
+      if (level === 0) {
+        promoted = TypePromotion.integerToRational(promoted);
+      } else if (level === 1) {
+        promoted = TypePromotion.rationalToInterval(promoted);
+      }
+    }
+    return promoted;
+  }
+  static promoteToCommonType(a, b) {
+    const levelA = TypePromotion.getTypeLevel(a);
+    const levelB = TypePromotion.getTypeLevel(b);
+    const targetLevel = Math.max(levelA, levelB);
+    return [
+      TypePromotion.promoteToLevel(a, targetLevel),
+      TypePromotion.promoteToLevel(b, targetLevel)
+    ];
+  }
+  static add(a, b) {
+    if (a instanceof RationalInterval && b instanceof CertifiedApproximation)
+      return a.add(b.enclosure);
+    if (b instanceof RationalInterval && a instanceof CertifiedApproximation)
+      return a.enclosure.add(b);
+    if (a instanceof CertifiedApproximation)
+      return a.add(b);
+    if (b instanceof CertifiedApproximation)
+      return b._operateExactLeft("add", a);
+    const [promotedA, promotedB] = TypePromotion.promoteToCommonType(a, b);
+    return promotedA.add(promotedB);
+  }
+  static subtract(a, b) {
+    if (a instanceof RationalInterval && b instanceof CertifiedApproximation)
+      return a.subtract(b.enclosure);
+    if (b instanceof RationalInterval && a instanceof CertifiedApproximation)
+      return a.enclosure.subtract(b);
+    if (a instanceof CertifiedApproximation)
+      return a.subtract(b);
+    if (b instanceof CertifiedApproximation)
+      return b._operateExactLeft("subtract", a);
+    const [promotedA, promotedB] = TypePromotion.promoteToCommonType(a, b);
+    return promotedA.subtract(promotedB);
+  }
+  static multiply(a, b) {
+    if (a instanceof RationalInterval && b instanceof CertifiedApproximation)
+      return a.multiply(b.enclosure);
+    if (b instanceof RationalInterval && a instanceof CertifiedApproximation)
+      return a.enclosure.multiply(b);
+    if (a instanceof CertifiedApproximation)
+      return a.multiply(b);
+    if (b instanceof CertifiedApproximation)
+      return b._operateExactLeft("multiply", a);
+    const [promotedA, promotedB] = TypePromotion.promoteToCommonType(a, b);
+    return promotedA.multiply(promotedB);
+  }
+  static divide(a, b) {
+    if (a instanceof RationalInterval && b instanceof CertifiedApproximation)
+      return a.divide(b.enclosure);
+    if (b instanceof RationalInterval && a instanceof CertifiedApproximation)
+      return a.enclosure.divide(b);
+    if (a instanceof CertifiedApproximation)
+      return a.divide(b);
+    if (b instanceof CertifiedApproximation)
+      return b._operateExactLeft("divide", a);
+    if (a instanceof Integer && b instanceof Integer) {
+      return a.divide(b);
+    }
+    const [promotedA, promotedB] = TypePromotion.promoteToCommonType(a, b);
+    return promotedA.divide(promotedB);
+  }
+  static eNotation(base, exponent) {
+    return base.E(exponent);
+  }
+  static power(base, exponent) {
+    return base.pow(exponent);
+  }
+  static multiplyPower(base, exponent) {
+    if (base.mpow && typeof base.mpow === "function") {
+      return base.mpow(exponent);
+    }
+    return base.pow(exponent);
+  }
+  static negate(value) {
+    if (value instanceof Integer) {
+      return value.negate();
+    } else if (value instanceof Rational) {
+      return value.negate();
+    } else if (value instanceof RationalInterval) {
+      const negOne = new Rational(-1n, 1n);
+      const negInterval = new RationalInterval(negOne, negOne);
+      return negInterval.multiply(value);
+    }
+    throw new Error(`Cannot negate unknown type: ${value.constructor.name}`);
+  }
+  static determineTypeFromString(str) {
+    if (str.includes("?"))
+      return "approximation";
+    if (str.includes(":") || str.includes("[") && str.includes("]")) {
+      return "interval";
+    }
+    if (str.includes("/") || str.includes("..") || str.includes(".")) {
+      return "rational";
+    }
+    return "integer";
   }
 }
-function ARCSIN(x, precision) {
-  const { epsilon } = parsePrecision(precision);
-  if (x instanceof RationalInterval) {
-    if (x.low.compareTo(new Rational(-1)) < 0 || x.high.compareTo(new Rational(1)) > 0) {
-      throw new Error("ARCSIN: argument must be in [-1, 1]");
-    }
-    const lower = ARCSIN(x.low, precision);
-    const upper = ARCSIN(x.high, precision);
-    return new RationalInterval(lower.low, upper.high);
-  }
-  if (!(x instanceof Rational)) {
-    x = new Rational(x);
-  }
-  if (x.compareTo(new Rational(-1)) < 0 || x.compareTo(new Rational(1)) > 0) {
-    throw new Error("ARCSIN: argument must be in [-1, 1]");
-  }
-  if (isZero(x)) {
-    return new RationalInterval(new Rational(0), new Rational(0));
-  }
-  let sum = x;
-  let term = x;
-  let n = 1;
-  let converged = false;
-  while (term.abs().compareTo(epsilon) > 0 && n < 30) {
-    term = term.multiply(x).multiply(x).multiply(new Rational((2 * n - 1) * (2 * n - 1))).divide(new Rational(2 * n * (2 * n + 1)));
-    sum = sum.add(term);
-    n++;
-    if (sum.denominator > 1000000000n || term.denominator > 1000000000n) {
-      break;
-    }
-    if (term.abs().compareTo(epsilon) <= 0) {
-      converged = true;
-      break;
-    }
-  }
-  if (converged && sum.denominator <= 1000000000n) {
-    const errorBound = term.abs().multiply(new Rational(2));
-    return new RationalInterval(sum.subtract(errorBound), sum.add(errorBound));
-  } else {
-    const xDecimal = x.toNumber();
-    const arcsinDecimal = Math.asin(xDecimal);
-    return createTightRationalInterval(arcsinDecimal, precision);
-  }
+
+// ../../packages/core/src/numeral-system.js
+var NUMERAL_SYSTEM_SCHEMA = "ratmath.numeral-system@1";
+var NUMERAL_LIMITS = Object.freeze({ tokens: 256, tokenLength: 32, sourceLength: 65536, digits: 4096, bits: 16384 });
+var reserved = /[\s+\-*/^!()[\]:.#~_`?\\]/u;
+var fail = (message) => {
+  throw new Error(`Numeral system: ${message}`);
+};
+var abs = (value) => value < 0n ? -value : value;
+function boundedInteger(value) {
+  if (typeof value !== "bigint" || abs(value).toString(2).length > NUMERAL_LIMITS.bits)
+    fail("exact component exceeds 16384 bits");
+  return value;
 }
-function ARCCOS(x, precision) {
-  const piOver2 = PI(precision).divide(new Rational(2));
-  const arcsinX = ARCSIN(x, precision);
-  return piOver2.subtract(arcsinX);
+function exact(value) {
+  const result = value instanceof Rational ? value : value instanceof Integer ? new Rational(value.value) : typeof value === "bigint" ? new Rational(value) : null;
+  if (!result)
+    fail("requires an exact Rational or Integer");
+  boundedInteger(result.numerator);
+  boundedInteger(result.denominator);
+  return result;
 }
-function TAN(x, precision) {
-  const { epsilon } = parsePrecision(precision);
-  if (x instanceof RationalInterval) {
-    const samples = 100;
-    let min = null, max = null;
-    for (let i = 0;i <= samples; i++) {
-      const t = x.low.add(x.high.subtract(x.low).multiply(new Rational(i)).divide(new Rational(samples)));
-      try {
-        const tanT = TAN(t, precision);
-        if (min === null || tanT.low.compareTo(min) < 0)
-          min = tanT.low;
-        if (max === null || tanT.high.compareTo(max) > 0)
-          max = tanT.high;
-      } catch (e) {
+function floor(value) {
+  let q = value.numerator / value.denominator;
+  if (value.numerator < 0n && value.numerator % value.denominator)
+    q--;
+  return q;
+}
+function digitLimit(value = 256) {
+  if (!Number.isSafeInteger(value) || value < 0 || value > NUMERAL_LIMITS.digits)
+    fail("maxDigits must be 0..4096");
+  return value;
+}
+var rational = (value) => new Rational(value);
+var key = (value) => `${value.numerator}/${value.denominator}`;
+
+class NumeralSystem {
+  constructor({ schema = NUMERAL_SYSTEM_SCHEMA, kind = "ordinary", radix, tokens } = {}) {
+    if (schema !== NUMERAL_SYSTEM_SCHEMA)
+      fail("unsupported schema");
+    if (!["ordinary", "multiToken", "balanced", "negative"].includes(kind))
+      fail("unsupported family");
+    if (!Number.isSafeInteger(radix) || Math.abs(radix) < 2 || Math.abs(radix) > NUMERAL_LIMITS.tokens)
+      fail("absolute radix must be 2..256");
+    if (kind === "negative" !== radix < 0)
+      fail("negative family requires negative radix; other families require positive radix");
+    if (kind === "balanced" && radix % 2 === 0)
+      fail("balanced systems require an odd radix");
+    if (!Array.isArray(tokens) || tokens.length !== Math.abs(radix))
+      fail("requires exactly one token for each digit value");
+    for (const token of tokens) {
+      if (typeof token !== "string" || !token.length || [...token].length > NUMERAL_LIMITS.tokenLength || reserved.test(token))
+        fail("tokens must be nonempty, bounded and disjoint from numeral punctuation");
+      if (kind === "ordinary" && [...token].length !== 1)
+        fail("ordinary systems require one Unicode character per token");
+    }
+    for (let i = 0;i < tokens.length; i++)
+      for (let j = i + 1;j < tokens.length; j++) {
+        if (tokens[i].startsWith(tokens[j]) || tokens[j].startsWith(tokens[i]))
+          fail("tokens must be unique and prefix-free");
+      }
+    this.schema = schema;
+    this.kind = kind;
+    this.radix = radix;
+    this.offset = kind === "balanced" ? -(radix - 1) / 2 : 0;
+    this.tokens = Object.freeze([...tokens]);
+    Object.freeze(this);
+  }
+  toJSON() {
+    return { schema: this.schema, kind: this.kind, radix: this.radix, tokens: [...this.tokens] };
+  }
+  tokenize(source, { allowEmpty = false } = {}) {
+    if (typeof source !== "string" || source.length > NUMERAL_LIMITS.sourceLength)
+      fail("source length budget exceeded");
+    const result = [];
+    for (let offset = 0;offset < source.length; ) {
+      if (source[offset] === "_") {
+        if (!result.length || offset + 1 === source.length || source[offset + 1] === "_")
+          fail("group separators must lie between tokens");
+        offset++;
         continue;
       }
+      const index = this.tokens.findIndex((token) => source.startsWith(token, offset));
+      if (index < 0)
+        fail(`invalid token at position ${offset + 1}`);
+      result.push(index + this.offset);
+      offset += this.tokens[index].length;
+      if (result.length > NUMERAL_LIMITS.digits)
+        fail("digit work budget exceeded");
     }
-    if (min === null || max === null) {
-      throw new Error("TAN: interval contains undefined points");
-    }
-    return new RationalInterval(min, max);
-  }
-  if (!(x instanceof Rational)) {
-    x = new Rational(x);
-  }
-  const piInterval = PI(precision);
-  const piApprox = piInterval.low.add(piInterval.high).divide(new Rational(2));
-  const piOver2 = piApprox.divide(new Rational(2));
-  const quotient = x.divide(piOver2);
-  const nearestOddMultiple = round(quotient);
-  if (Number(nearestOddMultiple.numerator % 2n) === 1) {
-    const distance = quotient.subtract(nearestOddMultiple).abs();
-    if (distance.compareTo(epsilon) < 0) {
-      throw new Error("TAN: undefined at odd multiples of π/2");
-    }
-  }
-  const sinX = SIN(x, precision);
-  const cosX = COS(x, precision);
-  if (cosX.low.abs().compareTo(epsilon) < 0 || cosX.high.abs().compareTo(epsilon) < 0) {
-    throw new Error("TAN: undefined (cosine too close to zero)");
-  }
-  return sinX.divide(cosX);
-}
-function ARCTAN(x, precision) {
-  const { epsilon } = parsePrecision(precision);
-  if (x instanceof RationalInterval) {
-    const lower = ARCTAN(x.low, precision);
-    const upper = ARCTAN(x.high, precision);
-    return new RationalInterval(lower.low, upper.high);
-  }
-  if (!(x instanceof Rational)) {
-    x = new Rational(x);
-  }
-  if (isZero(x)) {
-    return new RationalInterval(new Rational(0), new Rational(0));
-  }
-  const absX = x.abs();
-  if (absX.compareTo(new Rational(1)) > 0) {
-    const piOver2 = PI(precision).divide(new Rational(2));
-    const piOver2Mid = piOver2.low.add(piOver2.high).divide(new Rational(2));
-    const arctanRecip = ARCTAN(new Rational(1).divide(absX), precision);
-    const result = piOver2Mid.subtract(arctanRecip.low.add(arctanRecip.high).divide(new Rational(2)));
-    if (isNegative(x)) {
-      return new RationalInterval(result.negate(), result.negate());
-    } else {
-      return new RationalInterval(result, result);
-    }
-  }
-  let sum = x;
-  let term = x;
-  let n = 1;
-  while (term.abs().compareTo(epsilon) > 0 && n < 100) {
-    term = term.multiply(x).multiply(x).negate();
-    const denominator = new Rational(2 * n + 1);
-    sum = sum.add(term.divide(denominator));
-    n++;
-    if (sum.denominator > 100000000000n || term.denominator > 100000000000n) {
-      break;
-    }
-  }
-  const errorBound = term.abs().multiply(new Rational(2));
-  return new RationalInterval(sum.subtract(errorBound), sum.add(errorBound));
-}
-function newtonRoot(q, n, precision) {
-  const { epsilon } = parsePrecision(precision);
-  if (!(q instanceof Rational)) {
-    q = new Rational(q);
-  }
-  if (n <= 0) {
-    throw new Error("Root degree must be positive");
-  }
-  if (n === 1) {
-    return new RationalInterval(q, q);
-  }
-  if (isNegative(q) && n % 2 === 0) {
-    throw new Error("Even root of negative number");
-  }
-  const qDecimal = q.toNumber();
-  const initialGuess = Math.pow(qDecimal, 1 / n);
-  let a = new Rational(Math.round(initialGuess * 1000), 1000);
-  let iterations = 0;
-  const maxIterations = 100;
-  while (iterations < maxIterations) {
-    let aPower = a;
-    for (let i = 1;i < n - 1; i++) {
-      aPower = aPower.multiply(a);
-    }
-    const b = q.divide(aPower);
-    const diff = b.subtract(a).abs();
-    if (diff.compareTo(epsilon) <= 0) {
-      const lower = a.compareTo(b) < 0 ? a : b;
-      const upper = a.compareTo(b) > 0 ? a : b;
-      return new RationalInterval(lower, upper);
-    }
-    if (a.denominator > 100000000000n || b.denominator > 100000000000n) {
-      const aDecimal = a.toNumber();
-      const bDecimal = b.toNumber();
-      if (!isNaN(aDecimal) && !isNaN(bDecimal)) {
-        const lowerDecimal = Math.min(aDecimal, bDecimal);
-        const upperDecimal = Math.max(aDecimal, bDecimal);
-        const precisionScale = 1e7;
-        const lowerRational = new Rational(Math.floor(lowerDecimal * precisionScale), precisionScale);
-        const upperRational = new Rational(Math.ceil(upperDecimal * precisionScale), precisionScale);
-        return new RationalInterval(lowerRational, upperRational);
-      }
-    }
-    a = a.add(b.subtract(a).divide(new Rational(n)));
-    iterations++;
-  }
-  throw new Error("Newton's method did not converge");
-}
-function rationalIntervalPower(base, exponent, precision) {
-  if (exponent instanceof Integer) {
-    exponent = exponent.toRational();
-  } else if (typeof exponent === "bigint") {
-    exponent = new Rational(exponent);
-  } else if (typeof exponent === "number") {
-    exponent = new Rational(exponent);
-  }
-  if (exponent instanceof Rational && exponent.denominator <= 10n) {
-    const root = newtonRoot(base, Number(exponent.denominator), precision);
-    if (exponent.numerator === 1n) {
-      return root;
-    }
-    let result = root;
-    const numeratorNum = Number(exponent.numerator);
-    for (let i = 1;i < Math.abs(numeratorNum); i++) {
-      result = result.multiply(root);
-    }
-    if (numeratorNum < 0) {
-      return new RationalInterval(new Rational(1), new Rational(1)).divide(result);
-    }
+    if (!result.length && !allowEmpty)
+      fail("requires at least one digit");
     return result;
   }
-  const lnBase = LN(base, precision);
-  const product = lnBase.multiply(exponent);
-  if (product instanceof RationalInterval) {
-    return EXP(product, precision);
-  } else {
-    return EXP(product, precision);
+  fromDigits(digits) {
+    if (!Array.isArray(digits) || digits.length > NUMERAL_LIMITS.digits || digits.some((digit) => !Number.isInteger(digit) || digit < this.offset || digit >= this.offset + this.tokens.length))
+      fail("invalid or oversized digit array");
+    let result = 0n;
+    for (const digit of digits)
+      result = boundedInteger(result * BigInt(this.radix) + BigInt(digit));
+    return result;
+  }
+  parseInteger(source) {
+    let sign = 1n;
+    if (/^[+-]/.test(source)) {
+      if (source[0] === "-")
+        sign = -1n;
+      source = source.slice(1);
+    }
+    return sign * this.fromDigits(this.tokenize(source));
+  }
+  parse(source) {
+    if (typeof source !== "string" || source.length > NUMERAL_LIMITS.sourceLength)
+      fail("source length budget exceeded");
+    source = source.trim();
+    if (!source)
+      fail("empty numeral");
+    const shifts = source.split("_^");
+    if (shifts.length > 2 || shifts.length === 2 && !shifts[1])
+      fail("invalid radix shift");
+    source = shifts[0];
+    let result;
+    if (source.includes(".~")) {
+      const parts = source.replace(/^~/, "").replace(".~", "~").split("~");
+      if (parts.length < 2 || parts.length > 256)
+        fail("continued-fraction term budget exceeded");
+      const terms = parts.map((term) => this.parseInteger(term));
+      if (terms.slice(1).some((term) => term <= 0n))
+        fail("continued-fraction tails must be positive");
+      result = rational(terms.pop());
+      while (terms.length)
+        result = exact(rational(terms.pop()).add(rational(1n).divide(result)));
+    } else if (source.includes("..")) {
+      const parts = source.split("..");
+      if (parts.length !== 2 || parts[1].split("/").length !== 2)
+        fail("mixed numeral requires whole..numerator/denominator");
+      const whole = this.parseInteger(parts[0]), [n, d] = parts[1].split("/").map((text) => this.parseInteger(text));
+      if (n < 0n || d <= 0n)
+        fail("mixed fractional components must be nonnegative with positive denominator");
+      result = rational(whole).add(new Rational(whole < 0n || parts[0].startsWith("-") ? -n : n, d));
+    } else if (source.includes("/")) {
+      const parts = source.split("/");
+      if (parts.length !== 2)
+        fail("fraction requires one slash");
+      result = new Rational(this.parseInteger(parts[0]), this.parseInteger(parts[1]));
+    } else {
+      let sign = 1n;
+      if (/^[+-]/.test(source)) {
+        if (source[0] === "-")
+          sign = -1n;
+        source = source.slice(1);
+      }
+      const sections = source.split("#");
+      if (sections.length > 2 || sections.length === 2 && !sections[1])
+        fail("repeat requires one nonempty block");
+      const point = sections[0].split(".");
+      if (point.every((text) => !text))
+        fail("requires at least one digit");
+      if (point.length > 2)
+        fail("multiple radix points");
+      const whole = this.fromDigits(this.tokenize(point[0], { allowEmpty: point.length === 2 }));
+      const prefix = this.tokenize(point[1] || "", { allowEmpty: true });
+      const base = BigInt(this.radix), power = boundedInteger(base ** BigInt(prefix.length));
+      result = rational(whole).add(new Rational(this.fromDigits(prefix), power));
+      if (sections.length === 2) {
+        const repeated = this.tokenize(sections[1]);
+        const denominator = boundedInteger(power * (base ** BigInt(repeated.length) - 1n));
+        result = result.add(new Rational(this.fromDigits(repeated), denominator));
+      }
+      if (sign < 0n)
+        result = result.negate();
+    }
+    if (shifts.length === 2) {
+      const exponent = this.parseInteger(shifts[1]);
+      if (abs(exponent) > 4096n)
+        fail("radix shift budget exceeded");
+      const power = boundedInteger(BigInt(this.radix) ** abs(exponent));
+      result = exponent < 0n ? result.divide(rational(power)) : result.multiply(rational(power));
+    }
+    return exact(result);
+  }
+  integer(value, maxDigits = NUMERAL_LIMITS.digits) {
+    boundedInteger(value);
+    digitLimit(maxDigits);
+    const negative = this.kind !== "balanced" && this.radix > 0 && value < 0n;
+    let remaining = negative ? -value : value;
+    const digits = [], carries = [];
+    const modulus = BigInt(Math.abs(this.radix)), base = BigInt(this.radix);
+    do {
+      if (digits.length >= maxDigits)
+        return { status: "budgetExhausted", digits: digits.reverse(), carries, remaining, negative, spelling: null };
+      const residue = (remaining % modulus + modulus) % modulus;
+      const digit = Number((residue - BigInt(this.offset) + modulus) % modulus) + this.offset;
+      const next = (remaining - BigInt(digit)) / base;
+      carries.push({ before: remaining, digit, radix: this.radix, after: next });
+      digits.push(digit);
+      remaining = next;
+    } while (remaining !== 0n);
+    digits.reverse();
+    return { status: "complete", digits, carries, remaining, negative, spelling: `${negative ? "-" : ""}${this.digitText(digits)}` };
+  }
+  digitText(digits) {
+    return digits.map((digit) => this.tokens[digit - this.offset]).join("");
+  }
+  format(value, { maxDigits = 256, mode = "expansion" } = {}) {
+    const source = exact(value);
+    digitLimit(maxDigits);
+    if (!["expansion", "fraction"].includes(mode))
+      fail("format mode must be expansion or fraction");
+    if (mode === "fraction") {
+      const numerator = this.integer(source.numerator, maxDigits), denominator = this.integer(source.denominator, maxDigits);
+      return { schema: "ratmath.numeral-expansion@1", system: this.toJSON(), source, mode, status: numerator.spelling && denominator.spelling ? "complete" : "budgetExhausted", spelling: numerator.spelling && denominator.spelling ? `${numerator.spelling}/${denominator.spelling}` : null, numerator, denominator };
+    }
+    const negative = this.radix > 0 && this.offset === 0 && source.numerator < 0n;
+    const working = negative ? source.negate() : source;
+    const lower = this.offset < 0 ? new Rational(-1, 2) : this.radix < 0 ? new Rational(this.radix, 1 - this.radix) : rational(0n);
+    const whole = floor(working.subtract(lower)), integer = this.integer(whole, maxDigits);
+    let remainder = working.subtract(rational(whole)), repeatStart = null;
+    const fractional = [], seen = new Map, steps = [];
+    if (integer.status === "complete")
+      while (remainder.numerator !== 0n) {
+        const id = key(remainder);
+        if (seen.has(id)) {
+          repeatStart = seen.get(id);
+          break;
+        }
+        if (integer.digits.length + fractional.length >= maxDigits)
+          break;
+        seen.set(id, fractional.length);
+        const scaled = remainder.multiply(rational(BigInt(this.radix)));
+        let digit = Number(floor(scaled.subtract(lower)));
+        digit = Math.max(this.offset, Math.min(this.offset + this.tokens.length - 1, digit));
+        const next = exact(scaled.subtract(rational(BigInt(digit))));
+        steps.push({ before: remainder, scaled, digit, after: next });
+        fractional.push(digit);
+        remainder = next;
+      }
+    const complete = integer.status === "complete" && (remainder.numerator === 0n || repeatStart !== null);
+    const prefix = repeatStart === null ? fractional : fractional.slice(0, repeatStart), repeat = repeatStart === null ? [] : fractional.slice(repeatStart);
+    const partial = integer.spelling === null ? null : `${negative ? "-" : ""}${integer.spelling}${fractional.length || repeat.length ? "." + this.digitText(prefix) : ""}${repeat.length ? "#" + this.digitText(repeat) : ""}`;
+    const spelling = complete ? partial : null;
+    return { schema: "ratmath.numeral-expansion@1", system: this.toJSON(), source, mode, status: complete ? "complete" : "budgetExhausted", spelling, partial, negative, integer, prefix, repeat, steps, remaining: remainder, maxDigits, work: integer.digits.length + fractional.length };
+  }
+  locale(source, { point = ".", group = ",", groupSize = 3 } = {}, direction = "format") {
+    if (typeof point !== "string" || typeof group !== "string" || !point.length || !group.length || point.length > 4 || group.length > 4 || point.startsWith(group) || group.startsWith(point))
+      fail("locale separators must be distinct, bounded and nonempty");
+    if (!Number.isInteger(groupSize) || groupSize < 1 || groupSize > 8)
+      fail("locale groupSize must be 1..8");
+    for (const separator of [point, group]) {
+      if (/[+\-*/^!()[\]:#~`?\\]/u.test(separator) || this.tokens.some((token) => token.includes(separator) || separator.includes(token)))
+        fail("locale separator collides with numeral tokens or grammar");
+    }
+    if (typeof source !== "string" || source.length > NUMERAL_LIMITS.sourceLength)
+      fail("source length budget exceeded");
+    if (!["format", "parse"].includes(direction))
+      fail("locale direction must be format or parse");
+    const encode = (canonical) => {
+      if (/[\/~]|\.\.|_\^/.test(canonical))
+        fail("locale adapters support positional expansions only");
+      this.parse(canonical);
+      const sign = /^[+-]/.test(canonical) ? canonical[0] : "";
+      const body = sign ? canonical.slice(1) : canonical;
+      const pieces = body.split(".");
+      if (pieces.length === 1 && body.includes("#"))
+        return encode(sign + body.replace("#", ".#"));
+      const values = this.tokenize(pieces[0]);
+      const groups = [];
+      for (let stop = values.length;stop > 0; stop -= groupSize)
+        groups.unshift(this.digitText(values.slice(Math.max(0, stop - groupSize), stop)));
+      return sign + groups.join(group) + (pieces.length === 2 ? point + pieces[1] : "");
+    };
+    if (direction === "format")
+      return encode(source);
+    let canonical = "";
+    for (let offset = 0;offset < source.length; ) {
+      if (source.startsWith(point, offset)) {
+        canonical += ".";
+        offset += point.length;
+      } else if (source.startsWith(group, offset))
+        offset += group.length;
+      else {
+        const token = this.tokens.find((token) => source.startsWith(token, offset));
+        canonical += token ?? source[offset];
+        offset += token?.length ?? 1;
+      }
+    }
+    if (encode(canonical) !== source)
+      fail("noncanonical locale grouping");
+    return this.parse(canonical);
+  }
+  normalize(source, options) {
+    return this.format(this.parse(source), options);
+  }
+  places(source) {
+    source = source.trim();
+    const value = this.parse(source);
+    if (/[#/~]|\.\.|_\^/.test(source))
+      return { value, places: [], diagnostic: "Compound numeral: inspect its exact value and normalized expansion." };
+    let sign = 1n;
+    if (/^[+-]/.test(source)) {
+      if (source[0] === "-")
+        sign = -1n;
+      source = source.slice(1);
+    }
+    const [a, b = ""] = source.split("."), whole = this.tokenize(a, { allowEmpty: true }), fraction = this.tokenize(b, { allowEmpty: true });
+    const digits = [...whole, ...fraction];
+    return { value, places: digits.map((digit, index) => {
+      const exponent = whole.length - index - 1, power = BigInt(this.radix) ** BigInt(Math.abs(exponent));
+      const weight = exponent < 0 ? new Rational(1n, power) : rational(power);
+      return { token: this.tokens[digit - this.offset], digit, exponent, weight, contribution: weight.multiply(rational(sign * BigInt(digit))) };
+    }) };
   }
 }
 
-// ../../packages/parser/src/index.js
-var DEFAULT_PRECISION = -6;
-function parseDecimalUncertainty(str, options = {}) {
-  const allowIntegerRangeNotation = options.allowIntegerRangeNotation !== false;
-  const inputBase = options.inputBase || BaseSystem.DECIMAL;
-  const uncertaintyMatch = str.match(/^(-?[@\w./:^]+)\[([^\]]+)\]((?:[Ee][+-]?[\w]+|\_?\^-?[\w]+)?)$/);
-  if (!uncertaintyMatch) {
-    throw new Error("Invalid uncertainty format");
+// ../../packages/core/src/number-parser.js
+function parseDecimalValue(input) {
+  const [numerator, denominator] = parseDecimalParts(input);
+  return new Rational(numerator, denominator);
+}
+function parseRationalLiteral(input) {
+  const [numerator, denominator] = parseRationalParts(input);
+  return new Rational(numerator, denominator);
+}
+function decimalShape(input) {
+  const match = input.match(new RegExp(`^([+-]?)(?:(${DIGITS})(?:\\.(${DIGITS})?)?|\\.(${DIGITS}))$`));
+  if (!match) {
+    throw new Error("Decimal interval notation requires an integer or finite decimal base");
   }
-  const baseStr = uncertaintyMatch[1];
-  const uncertaintyStr = uncertaintyMatch[2];
-  const trailingPart = uncertaintyMatch[3];
-  const finalize = (interval) => {
-    if (trailingPart) {
-      const multiplier = parseRepeatingDecimalOrRegular("1" + trailingPart, inputBase);
-      return interval.multiply(multiplier);
-    }
-    return interval;
+  const sign = match[1] === "-" ? "-" : "";
+  const integer = match[2] ? cleanDigits(match[2]) : "0";
+  const fractional = match[3] ? cleanDigits(match[3]) : match[4] ? cleanDigits(match[4]) : "";
+  const hasPoint = input.includes(".");
+  return {
+    sign,
+    integer,
+    fractional,
+    hasPoint,
+    normalized: `${sign}${integer}${hasPoint ? `.${fractional}` : ""}`
   };
-  const afterDecimalMatch = baseStr.match(/^(-?[\w./:^]+\.)$/);
-  if (afterDecimalMatch && !uncertaintyStr.includes("+") && !uncertaintyStr.includes("-")) {
-    return finalize(parseDecimalPointUncertainty(baseStr, uncertaintyStr, inputBase, options));
+}
+function parseOffset(value) {
+  const normalized = value.startsWith("#") ? `0.${value}` : value;
+  return parseRationalLiteral(normalized);
+}
+function scaledOffset(value, decimalPlaces, hasPoint) {
+  const offset = parseOffset(value);
+  if (!hasPoint)
+    return offset;
+  return offset.divide(new Rational(10n ** BigInt(decimalPlaces)));
+}
+function parseUncertainty(input) {
+  const match = input.match(/^(.+)\[([^\[\]]+)\]$/);
+  if (!match) {
+    throw new Error(`Invalid decimal interval notation: ${input}`);
   }
-  const baseValue = parseBaseNotation(baseStr, inputBase, { ...options, typeAware: true });
-  const decimalMatch = baseStr.match(/\.([\w^/_]+)$/);
-  const baseDecimalPlaces = decimalMatch ? decimalMatch[1].length : 0;
-  let result;
-  if ((uncertaintyStr.includes(",") || uncertaintyStr.includes(":")) && !uncertaintyStr.includes("+") && !uncertaintyStr.includes("-")) {
-    if (baseDecimalPlaces === 0 && !allowIntegerRangeNotation) {
-      throw new Error("Range notation on integer bases is not supported in this context");
+  const shape = decimalShape(match[1]);
+  const body = match[2].trim();
+  const base = parseDecimalValue(shape.normalized);
+  if (body.includes(",")) {
+    throw new Error("Decimal interval notation requires ':' between bracketed values");
+  }
+  if (body.startsWith("+-") || body.startsWith("-+")) {
+    const offsetText = body.slice(2).trim();
+    if (offsetText.length === 0) {
+      throw new Error("Symmetric notation must have a valid number after '+-' or '-+'");
     }
-    const rangeParts = uncertaintyStr.split(/[: ,]+/).filter((s) => s.length > 0);
-    if (rangeParts.length !== 2) {
-      throw new Error("Range notation must have exactly two values separated by colon or comma");
-    }
-    const lowerUncertainty = rangeParts[0].trim();
-    const upperUncertainty = rangeParts[1].trim();
-    const hasConfusingENotation = inputBase.base === 10 && (baseStr.includes("E") || baseStr.includes("e")) || baseStr.includes("_^");
-    if (hasConfusingENotation) {
-      throw new Error("Uncertainty notation cannot be used with scientific notation in the base value");
-    }
-    const isValidForBase = (s) => {
-      if (inputBase.isValidString(s.replace(".", "")))
-        return true;
-      if (inputBase.base <= 36) {
-        return inputBase.isValidString(s.replace(".", "").toLowerCase());
-      }
-      return false;
-    };
-    if (!isValidForBase(lowerUncertainty) || !isValidForBase(upperUncertainty)) {
-      throw new Error(`Range values must be valid for base ${inputBase.base}`);
-    }
-    const lowerBoundStr = baseStr + lowerUncertainty;
-    const upperBoundStr = baseStr + upperUncertainty;
-    const lowerBoundResult = parseBaseNotation(lowerBoundStr, inputBase, { ...options, typeAware: true });
-    const upperBoundResult = parseBaseNotation(upperBoundStr, inputBase, { ...options, typeAware: true });
-    let lowerBound = lowerBoundResult instanceof Integer ? lowerBoundResult.toRational() : lowerBoundResult;
-    let upperBound = upperBoundResult instanceof Integer ? upperBoundResult.toRational() : upperBoundResult;
-    result = lowerBound.greaterThan(upperBound) ? new RationalInterval(upperBound, lowerBound) : new RationalInterval(lowerBound, upperBound);
-  } else if (uncertaintyStr.startsWith("+-") || uncertaintyStr.startsWith("-+")) {
-    const offsetStr = uncertaintyStr.substring(2);
-    if (!offsetStr) {
-      throw new Error("Symmetric notation must have a valid number after +- or -+");
-    }
-    const isRepeating = offsetStr.startsWith("#");
-    const offset = parseRepeatingDecimalOrRegular(offsetStr, inputBase);
-    const baseVal = BigInt(inputBase.base);
-    if (baseDecimalPlaces === 0 && !baseStr.includes(".")) {
-      const upperBound = baseValue.add(offset);
-      const lowerBound = baseValue.subtract(offset);
-      result = new RationalInterval(lowerBound, upperBound);
-    } else {
-      const scalePower = isRepeating ? baseDecimalPlaces : baseDecimalPlaces + 1;
-      const nextPlaceScale = new Rational(1).divide(new Rational(baseVal).pow(scalePower));
-      const scaledOffset = offset.multiply(nextPlaceScale);
-      const upperBound = baseValue.add(scaledOffset);
-      const lowerBound = baseValue.subtract(scaledOffset);
-      result = new RationalInterval(lowerBound, upperBound);
-    }
-  } else {
-    const relativeParts = uncertaintyStr.split(/[: ,]+/).filter((s) => s.length > 0).map((s) => s.trim());
-    if (relativeParts.length > 2 || relativeParts.length === 0) {
-      throw new Error("Relative notation must have one or two values separated by colon or comma");
-    }
-    const hasConfusingENotation = inputBase.base === 10 && (baseStr.includes("E") || baseStr.includes("e")) || baseStr.includes("_^");
-    if (hasConfusingENotation) {
-      throw new Error("Uncertainty notation cannot be used with scientific notation in the base value");
-    }
-    let positiveOffset = null;
-    let negativeOffset = null;
-    for (const part of relativeParts) {
-      if (part.startsWith("+")) {
-        if (positiveOffset !== null)
-          throw new Error("Only one positive offset allowed");
-        const offsetStr = part.substring(1);
-        if (!offsetStr)
-          throw new Error("Offset must be a valid number");
-        positiveOffset = parseRepeatingDecimalOrRegular(offsetStr, inputBase);
-      } else if (part.startsWith("-")) {
-        if (negativeOffset !== null)
-          throw new Error("Only one negative offset allowed");
-        const offsetStr = part.substring(1);
-        if (!offsetStr)
-          throw new Error("Offset must be a valid number");
-        negativeOffset = parseRepeatingDecimalOrRegular(offsetStr, inputBase);
+    const offset = scaledOffset(offsetText, shape.fractional.length, shape.hasPoint);
+    return new RationalInterval(base.subtract(offset), base.add(offset));
+  }
+  const parts = body.split(/\s*:\s*/);
+  if (parts.length > 2 || parts.length === 0 || parts.some((part) => part.length === 0)) {
+    throw new Error("Decimal interval brackets require one or two colon-separated values");
+  }
+  const hasSignedPart = parts.some((part) => part.startsWith("+") || part.startsWith("-"));
+  if (hasSignedPart) {
+    let positive = null;
+    let negative = null;
+    for (const part of parts) {
+      if (part.startsWith("+") && positive === null) {
+        positive = part.slice(1);
+      } else if (part.startsWith("-") && negative === null) {
+        negative = part.slice(1);
       } else {
-        throw new Error("Relative notation values must start with + or -");
+        throw new Error("Relative interval notation allows one '+' and one '-' offset");
       }
     }
-    if (positiveOffset === null)
-      positiveOffset = new Integer(0);
-    if (negativeOffset === null)
-      negativeOffset = new Integer(0);
-    const baseVal = BigInt(inputBase.base);
-    let upperBound, lowerBound;
-    if (baseDecimalPlaces === 0 && !baseStr.includes(".")) {
-      upperBound = baseValue.add(positiveOffset);
-      lowerBound = baseValue.subtract(negativeOffset);
-    } else {
-      const posPart = relativeParts.find((p) => p.startsWith("+"));
-      const negPart = relativeParts.find((p) => p.startsWith("-"));
-      const posIsRepeating = posPart && posPart.substring(1).startsWith("#");
-      const negIsRepeating = negPart && negPart.substring(1).startsWith("#");
-      const posScalePower = posIsRepeating ? baseDecimalPlaces : baseDecimalPlaces + 1;
-      const negScalePower = negIsRepeating ? baseDecimalPlaces : baseDecimalPlaces + 1;
-      const posScale = new Rational(1).divide(new Rational(baseVal).pow(posScalePower));
-      const negScale = new Rational(1).divide(new Rational(baseVal).pow(negScalePower));
-      const scaledPositiveOffset = positiveOffset.multiply(posScale);
-      const scaledNegativeOffset = negativeOffset.multiply(negScale);
-      upperBound = baseValue.add(scaledPositiveOffset);
-      lowerBound = baseValue.subtract(scaledNegativeOffset);
-    }
-    result = new RationalInterval(lowerBound, upperBound);
+    const positiveOffset = positive === null ? Rational.zero : scaledOffset(positive, shape.fractional.length, shape.hasPoint);
+    const negativeOffset = negative === null ? Rational.zero : scaledOffset(negative, shape.fractional.length, shape.hasPoint);
+    return new RationalInterval(base.subtract(negativeOffset), base.add(positiveOffset));
   }
-  return finalize(result);
-}
-function parseDecimalPointUncertainty(baseStr, uncertaintyStr, baseSystem = BaseSystem.DECIMAL, options = {}) {
-  if (uncertaintyStr.includes(",") || uncertaintyStr.includes(":")) {
-    const rangeParts = uncertaintyStr.split(/[: ,]+/).filter((s) => s.length > 0);
-    if (rangeParts.length !== 2) {
-      throw new Error("Range notation must have exactly two values separated by colon or comma");
-    }
-    const lowerStr = rangeParts[0].trim();
-    const upperStr = rangeParts[1].trim();
-    const lowerBound = parseDecimalPointEndpoint(baseStr, lowerStr, baseSystem, options);
-    const upperBound = parseDecimalPointEndpoint(baseStr, upperStr, baseSystem, options);
-    return new RationalInterval(lowerBound, upperBound);
-  } else {
-    throw new Error("Invalid uncertainty format for decimal point notation");
-  }
-}
-function parseDecimalPointEndpoint(baseStr, endpointStr, baseSystem = BaseSystem.DECIMAL, options = {}) {
-  if (endpointStr.startsWith("#")) {
-    const fullStr = baseStr + endpointStr;
-    return parseRepeatingDecimal(fullStr);
-  } else {
-    const fullStr = baseStr + endpointStr;
-    try {
-      const result = parseBaseNotation(fullStr, baseSystem, { ...options, typeAware: true });
-      return result instanceof Integer ? result.toRational() : result;
-    } catch (e) {
-      throw new Error(`Invalid endpoint format: ${endpointStr}`);
-    }
-  }
-}
-function parseRepeatingDecimalOrRegular(str, baseSystem = BaseSystem.DECIMAL) {
-  if (str.includes("#")) {
-    let eNotationIndex = -1;
-    let eNotationType = null;
-    const explicitSciIndex = str.indexOf("_^");
-    if (explicitSciIndex !== -1) {
-      eNotationIndex = explicitSciIndex;
-      eNotationType = "_^";
-    } else if (baseSystem.base === 10) {
-      const eIndex = str.toUpperCase().indexOf("E");
-      if (eIndex !== -1) {
-        eNotationIndex = eIndex;
-        eNotationType = "E";
-      }
-    }
-    if (eNotationIndex !== -1) {
-      const repeatingPart = str.substring(0, eNotationIndex);
-      const exponentPart = str.substring(eNotationIndex + (eNotationType === "_^" ? 2 : 1));
-      const absExponentPart = exponentPart.startsWith("-") ? exponentPart.substring(1) : exponentPart;
-      if (!baseSystem.isValidString(absExponentPart)) {
-        throw new Error(`${eNotationType} notation exponent must be a valid integer in base ${baseSystem.base}`);
-      }
-      const baseValue = parseRepeatingDecimal(repeatingPart);
-      const exponent = baseSystem.toDecimal(exponentPart);
-      const scaleBaseNum = eNotationType === "E" ? 10 : baseSystem.base;
-      const scaleBaseRatio = new Rational(BigInt(scaleBaseNum));
-      let scale;
-      if (exponent >= 0n) {
-        scale = scaleBaseRatio.pow(exponent);
-      } else {
-        scale = new Rational(1).divide(scaleBaseRatio.pow(-exponent));
-      }
-      return baseValue.multiply(scale);
-    } else {
-      return parseRepeatingDecimal(str);
-    }
-  } else {
-    return parseBaseNotation(str, baseSystem);
-  }
-}
-function parseRepeatingDecimal(str) {
-  if (!str || typeof str !== "string") {
-    throw new Error("Input must be a non-empty string");
-  }
-  str = str.trim();
-  if (str.includes("[") && str.includes("]")) {
-    return parseDecimalUncertainty(str, { allowIntegerRangeNotation: false });
-  }
-  if (str.includes(":")) {
-    return parseRepeatingDecimalInterval(str);
-  }
-  const isNegative2 = str.startsWith("-");
-  if (isNegative2) {
-    str = str.substring(1);
-  }
-  if (!str.includes("#")) {
-    return parseNonRepeatingDecimal(str, isNegative2);
-  }
-  const parts = str.split("#");
   if (parts.length !== 2) {
-    throw new Error('Invalid repeating decimal format. Use format like "0.12#45"');
+    throw new Error("Compact interval notation requires exactly two endpoints");
   }
-  const [nonRepeatingPart, repeatingPart] = parts;
-  if (!/^\d+$/.test(repeatingPart)) {
-    throw new Error("Repeating part must contain only digits");
-  }
-  if (repeatingPart === "0") {
-    try {
-      const decimalParts2 = nonRepeatingPart.split(".");
-      if (decimalParts2.length > 2) {
-        throw new Error("Invalid decimal format - multiple decimal points");
+  const endpoint = (suffix) => {
+    if (shape.hasPoint && shape.fractional.length === 0) {
+      if (suffix.startsWith("#")) {
+        return parseDecimalValue(`${shape.sign}${shape.integer}.${suffix}`);
       }
-      const integerPart2 = decimalParts2[0] || "0";
-      const fractionalPart2 = decimalParts2[1] || "";
-      if (!/^\d*$/.test(integerPart2) || !/^\d*$/.test(fractionalPart2)) {
-        throw new Error("Decimal must contain only digits and at most one decimal point");
-      }
-      let numerator2, denominator2;
-      if (!fractionalPart2) {
-        numerator2 = BigInt(integerPart2);
-        denominator2 = 1n;
-      } else {
-        numerator2 = BigInt(integerPart2 + fractionalPart2);
-        denominator2 = 10n ** BigInt(fractionalPart2.length);
-      }
-      const rational = new Rational(numerator2, denominator2);
-      return isNegative2 ? rational.negate() : rational;
-    } catch (error) {
-      throw new Error(`Invalid decimal format: ${error.message}`);
+      const cleanSuffix = cleanDigits(suffix);
+      return parseDecimalValue(`${shape.sign}${shape.integer}.${cleanSuffix}`);
     }
-  }
-  const decimalParts = nonRepeatingPart.split(".");
-  if (decimalParts.length > 2) {
-    throw new Error("Invalid decimal format - multiple decimal points");
-  }
-  const integerPart = decimalParts[0] || "0";
-  const fractionalPart = decimalParts[1] || "";
-  if (!/^\d*$/.test(integerPart) || !/^\d*$/.test(fractionalPart)) {
-    throw new Error("Non-repeating part must contain only digits and at most one decimal point");
-  }
-  const n = fractionalPart.length;
-  const m = repeatingPart.length;
-  const abcStr = integerPart + fractionalPart + repeatingPart;
-  const abStr = integerPart + fractionalPart;
-  const abc = BigInt(abcStr);
-  const ab = BigInt(abStr);
-  const powerOfTenN = 10n ** BigInt(n);
-  const powerOfTenM = 10n ** BigInt(m);
-  const denominator = powerOfTenN * (powerOfTenM - 1n);
-  const numerator = abc - ab;
-  let result = new Rational(numerator, denominator);
-  return isNegative2 ? result.negate() : result;
+    const cleanSuffix = cleanDigits(suffix);
+    const point = shape.hasPoint ? "." : "";
+    return parseDecimalValue(`${shape.sign}${shape.integer}${point}${shape.fractional}${cleanSuffix}`);
+  };
+  return new RationalInterval(endpoint(parts[0]), endpoint(parts[1]));
 }
-function parseNonRepeatingDecimal(str, isNegative2) {
-  const decimalParts = str.split(".");
-  if (decimalParts.length > 2) {
-    throw new Error("Invalid decimal format - multiple decimal points");
+function parseApproximation(input) {
+  let value = inputString(input, "certified approximation");
+  const derived = value.match(/^(.+?)\?\[=([^:]+):([^:]+)\]$/);
+  if (derived) {
+    const candidate = parseRationalLiteral(derived[1]);
+    let enclosure = new RationalInterval(parseRationalLiteral(derived[2]), parseRationalLiteral(derived[3]));
+    if (!enclosure.containsValue(candidate) && candidate.lessThan(Rational.zero) && enclosure.low.greaterThanOrEqual(Rational.zero)) {
+      enclosure = enclosure.negate();
+    }
+    return new CertifiedApproximation(candidate, enclosure, {
+      representation: {
+        kind: "derived",
+        reason: "serialized",
+        original: value
+      }
+    });
   }
-  const integerPart = decimalParts[0] || "0";
-  const fractionalPart = decimalParts[1] || "";
-  if (!/^\d+$/.test(integerPart) || !/^\d*$/.test(fractionalPart)) {
-    throw new Error("Decimal must contain only digits and at most one decimal point");
+  const explicitCf = value.startsWith("~");
+  const cfValue = explicitCf ? value.slice(1) : value;
+  const cf = cfValue.match(new RegExp(`^([+-]?${DIGITS})\\.~(${DIGITS}(?:~${DIGITS})*)\\?(${DIGITS}(?:~${DIGITS})*)?$`));
+  if (cf) {
+    const certified = [
+      BigInt(cleanDigits(cf[1], { signed: true })),
+      ...cf[2].split("~").map((term) => BigInt(cleanDigits(term)))
+    ];
+    const provisional = cf[3] ? cf[3].split("~").map((term) => BigInt(cleanDigits(term))) : [];
+    return certifiedContinuedFractionPrefix({
+      coefficients: certified,
+      provisionalCoefficients: provisional,
+      original: value
+    });
   }
-  if (!fractionalPart) {
-    const rational = new Rational(integerPart);
-    return isNegative2 ? rational.negate() : rational;
-  }
-  const lastDigitPlace = 10n ** BigInt(fractionalPart.length + 1);
-  const baseValue = BigInt(integerPart + fractionalPart);
-  let lower, upper;
-  if (isNegative2) {
-    const lowerNumerator = -(baseValue * 10n + 5n);
-    const upperNumerator = -(baseValue * 10n - 5n);
-    lower = new Rational(lowerNumerator, lastDigitPlace);
-    upper = new Rational(upperNumerator, lastDigitPlace);
-  } else {
-    const lowerNumerator = baseValue * 10n - 5n;
-    const upperNumerator = baseValue * 10n + 5n;
-    lower = new Rational(lowerNumerator, lastDigitPlace);
-    upper = new Rational(upperNumerator, lastDigitPlace);
-  }
-  return new RationalInterval(lower, upper);
+  const match = value.match(/^(.+?)\?((?:\d(?:_?\d)*)?)(\[[^\[\]]+\])?$/);
+  if (!match)
+    throw new Error(`Invalid certified approximation notation: ${input}`);
+  const shape = decimalShape(match[1]);
+  const provisional = match[2] ? cleanDigits(match[2]) : "";
+  const candidateText = shape.hasPoint ? `${shape.normalized}${provisional}` : `${shape.normalized}${provisional ? `.${provisional}` : ""}`;
+  const explicitEnclosure = match[3] ? parseUncertainty(`${candidateText}${match[3]}`) : null;
+  return certifiedRadixPrefix({
+    integerDigits: shape.integer,
+    fractionalDigits: shape.fractional,
+    provisionalDigits: provisional,
+    negative: shape.sign === "-",
+    enclosure: explicitEnclosure,
+    original: value
+  });
 }
-function parseRepeatingDecimalInterval(str) {
-  const parts = str.split(":");
-  if (parts.length !== 2) {
-    throw new Error('Invalid interval format. Use format like "0.#3:0.5#0"');
+function parseNumber(input) {
+  const value = inputString(input);
+  if (value.includes("?")) {
+    return parseApproximation(value);
   }
-  const leftEndpoint = parseRepeatingDecimal(parts[0].trim());
-  const rightEndpoint = parseRepeatingDecimal(parts[1].trim());
-  if (leftEndpoint instanceof RationalInterval || rightEndpoint instanceof RationalInterval) {
-    throw new Error("Nested intervals are not supported");
+  if (value.includes("[") || value.includes("]")) {
+    return parseUncertainty(value);
   }
-  return new RationalInterval(leftEndpoint, rightEndpoint);
+  const intervalParts = value.split(":");
+  if (intervalParts.length === 2) {
+    return new RationalInterval(parseRationalLiteral(intervalParts[0]), parseRationalLiteral(intervalParts[1]));
+  }
+  if (intervalParts.length > 2) {
+    throw new Error("An interval must contain exactly two endpoints");
+  }
+  if (new RegExp(`^[+-]?${DIGITS}$`).test(value)) {
+    return new Integer(BigInt(cleanDigits(value, { signed: true })));
+  }
+  return parseRationalLiteral(value);
 }
-function parseBaseNotation(numberStr, baseSystem, options = {}) {
-  if (/\[[0-9a-zA-Z]+\]$/.test(numberStr)) {
-    throw new Error("Bracket base notation (Value[Base]) is no longer supported. Use prefix notation (0xValue, 0bValue) or the BASE command.");
+function parseRational(input) {
+  const value = parseNumber(input);
+  if (value instanceof CertifiedApproximation) {
+    return value.toRational();
   }
-  let isNegative2 = false;
-  if (numberStr.startsWith("-")) {
-    isNegative2 = true;
-    numberStr = numberStr.substring(1);
+  if (value instanceof RationalInterval) {
+    throw new Error("Expected a scalar rational number, received an interval");
   }
-  const prefixMatch = numberStr.match(/^0([a-zA-Z])/);
-  if (prefixMatch) {
-    const prefix = prefixMatch[1];
-    const registeredBase = BaseSystem.getSystemForPrefix(prefix);
-    if (registeredBase) {
-      baseSystem = registeredBase;
-      numberStr = numberStr.substring(2);
-    } else if (prefix === "D") {
-      numberStr = numberStr.substring(2);
-    } else if (prefix === "d") {
-      baseSystem = BaseSystem.DECIMAL;
-      numberStr = numberStr.substring(2);
-    } else {
-      if (prefix.toLowerCase() !== "e") {
-        throw new Error(`Invalid or unregistered prefix '0${prefix}'`);
-      }
-    }
+  return value instanceof Integer ? value.toRational() : value;
+}
+function parseDecimal(input) {
+  const value = inputString(input, "decimal");
+  if (value.includes("..") || value.includes("/") || value.includes(".~")) {
+    throw new Error("Expected decimal notation");
   }
-  let eNotationIndex = -1;
-  let eNotationType = null;
-  const explicitSciIndex = numberStr.indexOf("_^");
-  if (explicitSciIndex !== -1) {
-    eNotationIndex = explicitSciIndex;
-    eNotationType = "_^";
-  } else {
-    if (baseSystem.base === 10) {
-      const upperStr = numberStr.toUpperCase();
-      const eIndex = upperStr.indexOf("E");
-      if (eIndex !== -1) {
-        eNotationIndex = eIndex;
-        eNotationType = "E";
-      }
-    }
+  return parseDecimalValue(value);
+}
+function parseRepeatingDecimal(input) {
+  return parseDecimal(input);
+}
+function parseMixedNumber(input) {
+  const value = inputString(input, "mixed number");
+  if (!value.includes("..")) {
+    throw new Error("Expected mixed-fraction notation 'whole..numerator/denominator'");
   }
-  let baseNumber = numberStr;
-  let exponentStr = null;
-  if (eNotationIndex !== -1) {
-    baseNumber = numberStr.substring(0, eNotationIndex);
-    const exponentStart = eNotationIndex + (eNotationType === "_^" ? 2 : 1);
-    exponentStr = numberStr.substring(exponentStart);
-    if (!baseSystem.isValidString(exponentStr.replace("-", ""))) {
-      throw new Error(`Invalid exponent "${exponentStr}" for base ${baseSystem.base}`);
-    }
+  return parseRationalLiteral(value);
+}
+function parseContinuedFraction(input) {
+  if (Array.isArray(input)) {
+    return Rational.fromContinuedFraction(input);
   }
-  if (baseSystem.base <= 36 && baseSystem.base > 10) {
-    const usesLowercase = baseSystem.characters.some((char) => char >= "a" && char <= "z");
-    const usesUppercase = baseSystem.characters.some((char) => char >= "A" && char <= "Z");
-    if (usesLowercase && !usesUppercase) {
-      baseNumber = baseNumber.toLowerCase();
-      if (exponentStr) {
-        exponentStr = exponentStr.toLowerCase();
-      }
-    } else if (usesUppercase && !usesLowercase) {
-      baseNumber = baseNumber.toUpperCase();
-      if (exponentStr) {
-        exponentStr = exponentStr.toUpperCase();
-      }
-    }
+  const value = inputString(input, "continued fraction");
+  if (!value.includes(".~")) {
+    throw new Error("Expected continued-fraction notation 'a0.~a1~a2'");
   }
-  if (eNotationIndex !== -1) {
-    const baseValue = parseBaseNotation(baseNumber, baseSystem, options);
-    let exponentDecimal;
-    if (exponentStr.startsWith("-")) {
-      const positiveExponent = baseSystem.toDecimal(exponentStr.substring(1));
-      exponentDecimal = -positiveExponent;
-    } else {
-      exponentDecimal = baseSystem.toDecimal(exponentStr);
-    }
-    let powerOfBase;
-    const baseBigInt = BigInt(baseSystem.base);
-    if (exponentDecimal >= 0n) {
-      powerOfBase = new Rational(baseBigInt ** exponentDecimal);
-    } else {
-      powerOfBase = new Rational(1n, baseBigInt ** -exponentDecimal);
-    }
-    let baseRational;
-    if (baseValue instanceof Integer) {
-      baseRational = baseValue.toRational();
-    } else if (baseValue instanceof Rational) {
-      baseRational = baseValue;
-    } else {
-      throw new Error("E notation can only be applied to simple numbers, not intervals");
-    }
-    let result = baseRational.multiply(powerOfBase);
-    if (isNegative2) {
-      result = result.negate();
-    }
-    return options.typeAware && result.denominator === 1n ? new Integer(result.numerator) : result;
-  }
-  if (baseNumber.includes(":")) {
-    const parts = baseNumber.split(":");
-    if (parts.length !== 2) {
-      throw new Error('Base notation intervals must have exactly two endpoints separated by ":"');
-    }
-    const leftStr = isNegative2 ? "-" + parts[0].trim() : parts[0].trim();
-    const leftValue = parseBaseNotation(leftStr, baseSystem, options);
-    const rightValue = parseBaseNotation(parts[1].trim(), baseSystem, options);
-    let leftRational, rightRational;
-    if (leftValue instanceof Integer) {
-      leftRational = leftValue.toRational();
-    } else if (leftValue instanceof Rational) {
-      leftRational = leftValue;
-    } else if (leftValue instanceof RationalInterval && leftValue.low.equals(leftValue.high)) {
-      leftRational = leftValue.low;
-    } else {
-      throw new Error("Interval endpoints must be single values, not intervals");
-    }
-    if (rightValue instanceof Integer) {
-      rightRational = rightValue.toRational();
-    } else if (rightValue instanceof Rational) {
-      rightRational = rightValue;
-    } else if (rightValue instanceof RationalInterval && rightValue.low.equals(rightValue.high)) {
-      rightRational = rightValue.low;
-    } else {
-      throw new Error("Interval endpoints must be single values, not intervals");
-    }
-    const interval = new RationalInterval(leftRational, rightRational);
-    interval._explicitInterval = true;
-    return interval;
-  }
-  if (baseNumber.includes("..")) {
-    const parts = baseNumber.split("..");
-    if (parts.length !== 2) {
-      throw new Error('Mixed number notation must have exactly one ".." separator');
-    }
-    const wholePart = parts[0].trim();
-    const fractionPart = parts[1].trim();
-    if (!fractionPart.includes("/")) {
-      throw new Error('Mixed number fractional part must contain "/"');
-    }
-    const wholeDecimal = baseSystem.toDecimal(wholePart);
-    let wholeRational = new Rational(wholeDecimal);
-    if (isNegative2) {
-      wholeRational = wholeRational.negate();
-    }
-    const fractionResult = parseBaseNotation(fractionPart, baseSystem, options);
-    let fractionRational;
-    if (fractionResult instanceof Integer) {
-      fractionRational = fractionResult.toRational();
-    } else if (fractionResult instanceof Rational) {
-      fractionRational = fractionResult;
-    } else {
-      throw new Error("Mixed number fractional part must be a simple fraction");
-    }
-    if (wholeRational.numerator < 0n) {
-      const result = wholeRational.subtract(fractionRational.abs());
-      return options.typeAware && result.denominator === 1n ? new Integer(result.numerator) : result;
-    } else {
-      const result = wholeRational.add(fractionRational);
-      return options.typeAware && result.denominator === 1n ? new Integer(result.numerator) : result;
-    }
-  }
-  if (baseNumber.includes("/")) {
-    const parts = baseNumber.split("/");
-    if (parts.length !== 2) {
-      throw new Error('Fraction notation must have exactly one "/" separator');
-    }
-    const numeratorStr = parts[0].trim();
-    const denominatorStr = parts[1].trim();
-    const numeratorResult = parseBaseNotation(numeratorStr, baseSystem, options);
-    const denominatorResult = parseBaseNotation(denominatorStr, baseSystem, options);
-    const numRat = numeratorResult instanceof Integer ? numeratorResult.toRational() : numeratorResult;
-    const denRat = denominatorResult instanceof Integer ? denominatorResult.toRational() : denominatorResult;
-    if (denRat.numerator === 0n) {
-      throw new Error("Denominator cannot be zero");
-    }
-    let result = numRat.divide(denRat);
-    if (isNegative2) {
-      result = result.negate();
-    }
-    result._explicitFraction = true;
-    return result;
-  }
-  if (baseNumber.includes(".")) {
-    const parts = baseNumber.split(".");
-    if (parts.length !== 2) {
-      throw new Error('Decimal notation must have exactly one "." separator');
-    }
-    const integerPart = parts[0] || "0";
-    const fractionalPart = parts[1] || "";
-    const fullStr = integerPart + fractionalPart;
-    if (!baseSystem.isValidString(fullStr)) {
-      throw new Error(`String "${baseNumber}" contains characters not valid for ${baseSystem.name}`);
-    }
-    const integerDecimal = baseSystem.toDecimal(integerPart);
-    let fractionalDecimal = 0n;
-    const baseBigInt = BigInt(baseSystem.base);
-    for (let i = 0;i < fractionalPart.length; i++) {
-      const digitChar = fractionalPart[i];
-      const digitValue = BigInt(baseSystem.charMap.get(digitChar));
-      fractionalDecimal = fractionalDecimal * baseBigInt + digitValue;
-    }
-    const denominator = baseBigInt ** BigInt(fractionalPart.length);
-    const totalNumerator = integerDecimal * denominator + fractionalDecimal;
-    let result = new Rational(totalNumerator, denominator);
-    if (isNegative2) {
-      result = result.negate();
-    }
-    return options.typeAware && result.denominator === 1n ? new Integer(result.numerator) : result;
-  }
-  if (!baseSystem.isValidString(baseNumber)) {
-    throw new Error(`String "${baseNumber}" contains characters not valid for ${baseSystem.name}`);
-  }
-  let decimalValue = baseSystem.toDecimal(baseNumber);
-  if (isNegative2) {
-    decimalValue = -decimalValue;
-  }
-  if (options.typeAware) {
-    return new Integer(decimalValue);
-  } else {
-    return new Rational(decimalValue);
-  }
+  return value.includes("?") ? parseApproximation(value) : parseRationalLiteral(value);
+}
+function parseInterval(input) {
+  const value = parseNumber(input);
+  if (value instanceof RationalInterval)
+    return value;
+  if (value instanceof CertifiedApproximation)
+    return value.enclosure;
+  return RationalInterval.point(value instanceof Integer ? value.toRational() : value);
 }
 
-class Parser {
-  static parse(expression, options = {}) {
-    if (!expression || expression.trim() === "") {
-      throw new Error("Expression cannot be empty");
+// ../../packages/core/src/r-template.js
+var LITERAL = /^(?:\d[\d_]*\.\.\d[\d_]*\/\d[\d_]*|(?:\d[\d_]*)?\.?[\d_]*(?:\{\d+~\d+\}[\d_]*)*(?:#[\d_]*(?:\{\d+~\d+\}[\d_]*)*)?(?:\[[^\]]*\])?(?:\?[\d~]*)?)/;
+function tokenize(strings, values) {
+  const tokens = [];
+  strings.forEach((text, part) => {
+    let index = 0;
+    while (index < text.length) {
+      const rest = text.slice(index);
+      const space = rest.match(/^\s+/);
+      if (space) {
+        index += space[0].length;
+        continue;
+      }
+      if (/^[\d.]/.test(rest)) {
+        const literal = rest.match(LITERAL)[0];
+        if (!literal || literal === ".")
+          throw new SyntaxError(`R: unexpected '${rest[0]}'`);
+        tokens.push({ kind: "value", value: parseNumber(literal), text: literal });
+        index += literal.length;
+        continue;
+      }
+      if ("+-*/^:()!".includes(rest[0])) {
+        tokens.push({ kind: "op", value: rest[0] });
+        index += 1;
+        continue;
+      }
+      throw new SyntaxError(`R: unexpected '${rest[0]}' in \`${strings.join("${…}")}\``);
     }
-    options = { typeAware: true, ...options };
-    expression = expression.replace(/ E/g, "TE");
-    expression = expression.replace(/\/ /g, "/S");
-    expression = expression.replace(/\s+/g, "");
-    const result = Parser.#parseExpression(expression, options);
-    if (result.remainingExpr.length > 0) {
-      throw new Error(`Unexpected token at end: ${result.remainingExpr}`);
-    }
-    return result.value;
-  }
-  static #parseExpression(expr, options = {}) {
-    let result = Parser.#parseTerm(expr, options);
-    let currentExpr = result.remainingExpr;
-    while (currentExpr.length > 0 && (currentExpr[0] === "+" || currentExpr[0] === "-")) {
-      const operator = currentExpr[0];
-      currentExpr = currentExpr.substring(1);
-      const termResult = Parser.#parseTerm(currentExpr, options);
-      currentExpr = termResult.remainingExpr;
-      if (operator === "+") {
-        result.value = result.value.add(termResult.value);
-      } else {
-        result.value = result.value.subtract(termResult.value);
-      }
-    }
-    return {
-      value: Parser.#promoteType(result.value, options),
-      remainingExpr: currentExpr
-    };
-  }
-  static #parseTerm(expr, options = {}) {
-    let result = Parser.#parseFactor(expr, options);
-    let currentExpr = result.remainingExpr;
-    while (currentExpr.length > 0 && (currentExpr[0] === "*" || currentExpr[0] === "/" || currentExpr[0] === "E" || currentExpr.startsWith("TE"))) {
-      let operator, skipLength;
-      if (currentExpr.startsWith("TE")) {
-        operator = "E";
-        skipLength = 2;
-      } else {
-        operator = currentExpr[0];
-        skipLength = 1;
-      }
-      currentExpr = currentExpr.substring(skipLength);
-      if (operator === "/" && currentExpr.length > 0 && currentExpr[0] === "S") {
-        currentExpr = currentExpr.substring(1);
-      }
-      const factorResult = Parser.#parseFactor(currentExpr, options);
-      currentExpr = factorResult.remainingExpr;
-      if (operator === "*") {
-        result.value = result.value.multiply(factorResult.value);
-      } else if (operator === "/") {
-        result.value = result.value.divide(factorResult.value);
-      } else if (operator === "E") {
-        let exponentValue;
-        if (factorResult.value instanceof Integer) {
-          exponentValue = factorResult.value.value;
-        } else if (factorResult.value instanceof Rational) {
-          if (factorResult.value.denominator !== 1n) {
-            throw new Error("E notation exponent must be an integer");
-          }
-          exponentValue = factorResult.value.numerator;
-        } else if (factorResult.value.low && factorResult.value.high) {
-          if (!factorResult.value.low.equals(factorResult.value.high)) {
-            throw new Error("E notation exponent must be an integer");
-          }
-          const exponent = factorResult.value.low;
-          if (exponent.denominator !== 1n) {
-            throw new Error("E notation exponent must be an integer");
-          }
-          exponentValue = exponent.numerator;
-        } else {
-          throw new Error("Invalid E notation exponent type");
-        }
-        if (result.value.E && typeof result.value.E === "function") {
-          result.value = result.value.E(exponentValue);
-        } else {
-          const powerOf10 = exponentValue >= 0n ? new Rational(10n ** exponentValue) : new Rational(1n, 10n ** -exponentValue);
-          const powerInterval = RationalInterval.point(powerOf10);
-          result.value = result.value.multiply(powerInterval);
-        }
-      }
-    }
-    return {
-      value: Parser.#promoteType(result.value, options),
-      remainingExpr: currentExpr
-    };
-  }
-  static #parseFactor(expr, options = {}) {
-    if (expr.length === 0) {
-      throw new Error("Unexpected end of expression");
-    }
-    if (expr[0] === "(") {
-      const subExprResult = Parser.#parseExpression(expr.substring(1), options);
-      if (subExprResult.remainingExpr.length === 0 || subExprResult.remainingExpr[0] !== ")") {
-        throw new Error("Missing closing parenthesis");
-      }
-      const result = {
-        value: subExprResult.value,
-        remainingExpr: subExprResult.remainingExpr.substring(1)
-      };
-      if (result.remainingExpr.length > 0 && (result.remainingExpr[0] === "E" || result.remainingExpr.startsWith("TE") || result.remainingExpr.startsWith("_^"))) {
-        const eResult = Parser.#parseENotation(result.value, result.remainingExpr, options);
-        let factorialResult3 = eResult;
-        if (factorialResult3.remainingExpr.length > 1 && factorialResult3.remainingExpr.substring(0, 2) === "!!") {
-          if (factorialResult3.value instanceof Integer) {
-            factorialResult3 = {
-              value: factorialResult3.value.doubleFactorial(),
-              remainingExpr: factorialResult3.remainingExpr.substring(2)
-            };
-          } else if (factorialResult3.value instanceof Rational && factorialResult3.value.denominator === 1n) {
-            const intValue = new Integer(factorialResult3.value.numerator);
-            factorialResult3 = {
-              value: intValue.doubleFactorial().toRational(),
-              remainingExpr: factorialResult3.remainingExpr.substring(2)
-            };
-          } else if (factorialResult3.value.low && factorialResult3.value.high && factorialResult3.value.low.equals(factorialResult3.value.high) && factorialResult3.value.low.denominator === 1n) {
-            const intValue = new Integer(factorialResult3.value.low.numerator);
-            const factorialValue = intValue.doubleFactorial();
-            const IntervalClass = factorialResult3.value.constructor;
-            factorialResult3 = {
-              value: new IntervalClass(factorialValue.toRational(), factorialValue.toRational()),
-              remainingExpr: factorialResult3.remainingExpr.substring(2)
-            };
-          } else {
-            throw new Error("Double factorial is not defined for negative integers");
-          }
-        } else if (factorialResult3.remainingExpr.length > 0 && factorialResult3.remainingExpr[0] === "!") {
-          if (factorialResult3.value instanceof Integer) {
-            factorialResult3 = {
-              value: factorialResult3.value.factorial(),
-              remainingExpr: factorialResult3.remainingExpr.substring(1)
-            };
-          } else if (factorialResult3.value instanceof Rational && factorialResult3.value.denominator === 1n) {
-            const intValue = new Integer(factorialResult3.value.numerator);
-            factorialResult3 = {
-              value: intValue.factorial().toRational(),
-              remainingExpr: factorialResult3.remainingExpr.substring(1)
-            };
-          } else if (factorialResult3.value.low && factorialResult3.value.high && factorialResult3.value.low.equals(factorialResult3.value.high) && factorialResult3.value.low.denominator === 1n) {
-            const intValue = new Integer(factorialResult3.value.low.numerator);
-            const factorialValue = intValue.factorial();
-            const IntervalClass = factorialResult3.value.constructor;
-            factorialResult3 = {
-              value: new IntervalClass(factorialValue.toRational(), factorialValue.toRational()),
-              remainingExpr: factorialResult3.remainingExpr.substring(1)
-            };
-          } else {
-            throw new Error("Factorial is not defined for negative integers");
-          }
-        }
-        if (factorialResult3.remainingExpr.length > 0) {
-          if (factorialResult3.remainingExpr[0] === "^") {
-            const powerExpr = factorialResult3.remainingExpr.substring(1);
-            let powerResult;
-            let isIntegerExponent = false;
-            try {
-              powerResult = Parser.#parseExponent(powerExpr);
-              isIntegerExponent = true;
-            } catch (e) {
-              powerResult = Parser.#parseExponentExpression(powerExpr, options);
-              isIntegerExponent = false;
-            }
-            const zero = new Rational(0);
-            const isZeroBase = factorialResult3.value.low && factorialResult3.value.high ? factorialResult3.value.low.equals(zero) && factorialResult3.value.high.equals(zero) : factorialResult3.value instanceof Integer && factorialResult3.value.value === 0n || factorialResult3.value instanceof Rational && factorialResult3.value.numerator === 0n;
-            const isZeroExponent = isIntegerExponent ? powerResult.value === 0n : powerResult.value instanceof Rational && powerResult.value.numerator === 0n || powerResult.value instanceof Integer && powerResult.value.value === 0n;
-            if (isZeroBase && isZeroExponent) {
-              throw new Error("Zero cannot be raised to the power of zero");
-            }
-            let result2;
-            if (isIntegerExponent) {
-              result2 = factorialResult3.value.pow(powerResult.value);
-            } else {
-              const precision = options.precision || DEFAULT_PRECISION;
-              result2 = rationalIntervalPower(factorialResult3.value, powerResult.value, precision);
-            }
-            return {
-              value: result2,
-              remainingExpr: powerResult.remainingExpr
-            };
-          } else if (factorialResult3.remainingExpr.length > 1 && factorialResult3.remainingExpr[0] === "*" && factorialResult3.remainingExpr[1] === "*") {
-            const powerExpr = factorialResult3.remainingExpr.substring(2);
-            let powerResult;
-            let isIntegerExponent = false;
-            try {
-              powerResult = Parser.#parseExponent(powerExpr);
-              isIntegerExponent = true;
-            } catch (e) {
-              powerResult = Parser.#parseExponentExpression(powerExpr, options);
-              isIntegerExponent = false;
-            }
-            const isZeroExponent = isIntegerExponent && powerResult.value === 0n || !isIntegerExponent && powerResult.value instanceof Integer && powerResult.value.value === 0n || !isIntegerExponent && powerResult.value instanceof Rational && powerResult.value.numerator === 0n;
-            if (isZeroExponent) {
-              throw new Error("Multiplicative exponentiation requires at least one factor");
-            }
-            let result2;
-            if (!isIntegerExponent && powerResult.value instanceof Rational && Number(powerResult.value.denominator) <= 10 && Number(powerResult.value.denominator) > 1) {
-              const precision = options.precision || DEFAULT_PRECISION;
-              const rootDegree = Number(powerResult.value.denominator);
-              const rootInterval = newtonRoot(factorialResult3.value, rootDegree, precision);
-              if (!powerResult.value.numerator === 1n) {
-                const numeratorPower = Number(powerResult.value.numerator);
-                result2 = rootInterval;
-                for (let i = 1;i < Math.abs(numeratorPower); i++) {
-                  result2 = result2.multiply(rootInterval);
-                }
-                if (numeratorPower < 0) {
-                  result2 = new RationalInterval(new Rational(1).divide(result2.upper), new Rational(1).divide(result2.lower));
-                }
-              } else {
-                result2 = rootInterval;
-              }
-            } else if (isIntegerExponent) {
-              let base = factorialResult3.value;
-              if (!(base instanceof RationalInterval)) {
-                base = RationalInterval.point(base instanceof Integer ? base.toRational() : base);
-              }
-              result2 = base.mpow(powerResult.value);
-            } else {
-              const precision = options.precision || DEFAULT_PRECISION;
-              result2 = rationalIntervalPower(factorialResult3.value, powerResult.value, precision);
-            }
-            if (result2._skipPromotion === undefined) {
-              result2._skipPromotion = true;
-            }
-            return {
-              value: result2,
-              remainingExpr: powerResult.remainingExpr
-            };
-          }
-        }
-        return factorialResult3;
-      }
-      let factorialResult2 = result;
-      if (factorialResult2.remainingExpr.length > 1 && factorialResult2.remainingExpr.substring(0, 2) === "!!") {
-        if (factorialResult2.value instanceof Integer) {
-          factorialResult2 = {
-            value: factorialResult2.value.doubleFactorial(),
-            remainingExpr: factorialResult2.remainingExpr.substring(2)
-          };
-        } else if (factorialResult2.value instanceof Rational && factorialResult2.value.denominator === 1n) {
-          const intValue = new Integer(factorialResult2.value.numerator);
-          factorialResult2 = {
-            value: intValue.doubleFactorial().toRational(),
-            remainingExpr: factorialResult2.remainingExpr.substring(2)
-          };
-        } else if (factorialResult2.value.low && factorialResult2.value.high && factorialResult2.value.low.equals(factorialResult2.value.high) && factorialResult2.value.low.denominator === 1n) {
-          const intValue = new Integer(factorialResult2.value.low.numerator);
-          const factorialValue = intValue.doubleFactorial();
-          const IntervalClass = factorialResult2.value.constructor;
-          factorialResult2 = {
-            value: new IntervalClass(factorialValue.toRational(), factorialValue.toRational()),
-            remainingExpr: factorialResult2.remainingExpr.substring(2)
-          };
-        } else {
-          throw new Error("Double factorial is not defined for negative integers");
-        }
-      } else if (factorialResult2.remainingExpr.length > 0 && factorialResult2.remainingExpr[0] === "!") {
-        if (factorialResult2.value instanceof Integer) {
-          factorialResult2 = {
-            value: factorialResult2.value.factorial(),
-            remainingExpr: factorialResult2.remainingExpr.substring(1)
-          };
-        } else if (factorialResult2.value instanceof Rational && factorialResult2.value.denominator === 1n) {
-          const intValue = new Integer(factorialResult2.value.numerator);
-          factorialResult2 = {
-            value: intValue.factorial().toRational(),
-            remainingExpr: factorialResult2.remainingExpr.substring(1)
-          };
-        } else if (factorialResult2.value.low && factorialResult2.value.high && factorialResult2.value.low.equals(factorialResult2.value.high) && factorialResult2.value.low.denominator === 1n) {
-          const intValue = new Integer(factorialResult2.value.low.numerator);
-          const factorialValue = intValue.factorial();
-          const IntervalClass = factorialResult2.value.constructor;
-          factorialResult2 = {
-            value: new IntervalClass(factorialValue.toRational(), factorialValue.toRational()),
-            remainingExpr: factorialResult2.remainingExpr.substring(1)
-          };
-        } else {
-          throw new Error("Factorial is not defined for negative integers");
-        }
-      }
-      if (factorialResult2.remainingExpr.length > 0) {
-        if (factorialResult2.remainingExpr[0] === "^") {
-          const powerExpr = factorialResult2.remainingExpr.substring(1);
-          let powerResult;
-          let isIntegerExponent = false;
-          try {
-            powerResult = Parser.#parseExponent(powerExpr);
-            isIntegerExponent = true;
-          } catch (e) {
-            powerResult = Parser.#parseExponentExpression(powerExpr, options);
-            isIntegerExponent = false;
-          }
-          const zero = new Rational(0);
-          let isZero2 = false;
-          if (factorialResult2.value instanceof RationalInterval) {
-            isZero2 = factorialResult2.value.low.equals(zero) && factorialResult2.value.high.equals(zero);
-          } else if (factorialResult2.value instanceof Rational) {
-            isZero2 = factorialResult2.value.equals(zero);
-          } else if (factorialResult2.value instanceof Integer) {
-            isZero2 = factorialResult2.value.value === 0n;
-          }
-          const isZeroExponent = isIntegerExponent ? powerResult.value === 0n : powerResult.value instanceof Rational && powerResult.value.numerator === 0n || powerResult.value instanceof Integer && powerResult.value.value === 0n;
-          if (isZero2 && isZeroExponent) {
-            throw new Error("Zero cannot be raised to the power of zero");
-          }
-          let result2;
-          if (isIntegerExponent) {
-            result2 = factorialResult2.value.pow(powerResult.value);
-          } else {
-            const precision = options.precision || DEFAULT_PRECISION;
-            result2 = rationalIntervalPower(factorialResult2.value, powerResult.value, precision);
-          }
-          return {
-            value: result2,
-            remainingExpr: powerResult.remainingExpr
-          };
-        } else if (factorialResult2.remainingExpr.length > 1 && factorialResult2.remainingExpr[0] === "*" && factorialResult2.remainingExpr[1] === "*") {
-          const powerExpr = factorialResult2.remainingExpr.substring(2);
-          let powerResult;
-          let isIntegerExponent = false;
-          try {
-            powerResult = Parser.#parseExponent(powerExpr);
-            isIntegerExponent = true;
-          } catch (e) {
-            powerResult = Parser.#parseExponentExpression(powerExpr, options);
-            isIntegerExponent = false;
-          }
-          const isZeroExponent = isIntegerExponent && powerResult.value === 0n || !isIntegerExponent && powerResult.value instanceof Integer && powerResult.value.value === 0n || !isIntegerExponent && powerResult.value instanceof Rational && powerResult.value.numerator === 0n;
-          if (isZeroExponent) {
-            throw new Error("Multiplicative exponentiation requires at least one factor");
-          }
-          let result2;
-          if (!isIntegerExponent && powerResult.value instanceof Rational && Number(powerResult.value.denominator) <= 10 && Number(powerResult.value.denominator) > 1) {
-            const precision = options.precision || DEFAULT_PRECISION;
-            const rootDegree = Number(powerResult.value.denominator);
-            const rootInterval = newtonRoot(factorialResult2.value, rootDegree, precision);
-            if (!powerResult.value.numerator === 1n) {
-              const numeratorPower = Number(powerResult.value.numerator);
-              result2 = rootInterval;
-              for (let i = 1;i < Math.abs(numeratorPower); i++) {
-                result2 = result2.multiply(rootInterval);
-              }
-              if (numeratorPower < 0) {
-                result2 = new RationalInterval(new Rational(1).divide(result2.upper), new Rational(1).divide(result2.lower));
-              }
-            } else {
-              result2 = rootInterval;
-            }
-          } else if (isIntegerExponent) {
-            let base = factorialResult2.value;
-            if (!(base instanceof RationalInterval)) {
-              base = RationalInterval.point(base instanceof Integer ? base.toRational() : base);
-            }
-            result2 = base.mpow(powerResult.value);
-          } else {
-            const precision = options.precision || DEFAULT_PRECISION;
-            result2 = rationalIntervalPower(factorialResult2.value, powerResult.value, precision);
-          }
-          if (result2._skipPromotion === undefined) {
-            result2._skipPromotion = true;
-          }
-          return {
-            value: result2,
-            remainingExpr: powerResult.remainingExpr
-          };
-        }
-      }
-      return factorialResult2;
-    }
-    if (/^[A-Z]/.test(expr)) {
-      if (expr.startsWith("PI")) {
-        let precision = undefined;
-        let remainingExpr = expr.substring(2);
-        if (remainingExpr.startsWith("[")) {
-          const precisionMatch = remainingExpr.match(/^\[(-?\d+)\]/);
-          if (precisionMatch) {
-            precision = parseInt(precisionMatch[1], 10);
-            remainingExpr = remainingExpr.substring(precisionMatch[0].length);
-          }
-        }
-        const result = PI(precision);
-        result._explicitInterval = true;
-        return {
-          value: result,
-          remainingExpr
-        };
-      }
-      if (expr.startsWith("EXP")) {
-        let remainingExpr = expr.substring(3);
-        let precision = undefined;
-        if (remainingExpr.startsWith("[")) {
-          const precisionMatch = remainingExpr.match(/^\[(-?\d+)\]/);
-          if (precisionMatch) {
-            precision = parseInt(precisionMatch[1], 10);
-            remainingExpr = remainingExpr.substring(precisionMatch[0].length);
-          }
-        }
-        if (remainingExpr.startsWith("(")) {
-          const argResult = Parser.#parseExpression(remainingExpr.substring(1), options);
-          if (argResult.remainingExpr.length === 0 || argResult.remainingExpr[0] !== ")") {
-            throw new Error("Missing closing parenthesis for EXP function");
-          }
-          const result = EXP(argResult.value, precision);
-          result._explicitInterval = true;
-          return {
-            value: result,
-            remainingExpr: argResult.remainingExpr.substring(1)
-          };
-        } else {
-          const result = E(precision);
-          result._explicitInterval = true;
-          return {
-            value: result,
-            remainingExpr
-          };
-        }
-      }
-      if (expr.startsWith("LN")) {
-        let remainingExpr = expr.substring(2);
-        let precision = undefined;
-        if (remainingExpr.startsWith("[")) {
-          const precisionMatch = remainingExpr.match(/^\[(-?\d+)\]/);
-          if (precisionMatch) {
-            precision = parseInt(precisionMatch[1], 10);
-            remainingExpr = remainingExpr.substring(precisionMatch[0].length);
-          }
-        }
-        if (!remainingExpr.startsWith("(")) {
-          throw new Error("LN requires parentheses");
-        }
-        const argResult = Parser.#parseExpression(remainingExpr.substring(1), options);
-        if (argResult.remainingExpr.length === 0 || argResult.remainingExpr[0] !== ")") {
-          throw new Error("Missing closing parenthesis for LN function");
-        }
-        const result = LN(argResult.value, precision);
-        result._explicitInterval = true;
-        return {
-          value: result,
-          remainingExpr: argResult.remainingExpr.substring(1)
-        };
-      }
-      if (expr.startsWith("LOG")) {
-        let remainingExpr = expr.substring(3);
-        let precision = undefined;
-        if (remainingExpr.startsWith("[")) {
-          const precisionMatch = remainingExpr.match(/^\[(-?\d+)\]/);
-          if (precisionMatch) {
-            precision = parseInt(precisionMatch[1], 10);
-            remainingExpr = remainingExpr.substring(precisionMatch[0].length);
-          }
-        }
-        if (!remainingExpr.startsWith("(")) {
-          throw new Error("LOG requires parentheses");
-        }
-        const arg1Result = Parser.#parseExpression(remainingExpr.substring(1), options);
-        let base = 10;
-        let finalRemainingExpr = arg1Result.remainingExpr;
-        if (arg1Result.remainingExpr.startsWith(",")) {
-          const arg2Result = Parser.#parseExpression(arg1Result.remainingExpr.substring(1), options);
-          base = arg2Result.value;
-          finalRemainingExpr = arg2Result.remainingExpr;
-        }
-        if (finalRemainingExpr.length === 0 || finalRemainingExpr[0] !== ")") {
-          throw new Error("Missing closing parenthesis for LOG function");
-        }
-        const result = LOG(arg1Result.value, base, precision);
-        result._explicitInterval = true;
-        return {
-          value: result,
-          remainingExpr: finalRemainingExpr.substring(1)
-        };
-      }
-      if (expr.startsWith("SIN")) {
-        let remainingExpr = expr.substring(3);
-        let precision = undefined;
-        if (remainingExpr.startsWith("[")) {
-          const precisionMatch = remainingExpr.match(/^\[(-?\d+)\]/);
-          if (precisionMatch) {
-            precision = parseInt(precisionMatch[1], 10);
-            remainingExpr = remainingExpr.substring(precisionMatch[0].length);
-          }
-        }
-        if (!remainingExpr.startsWith("(")) {
-          throw new Error("SIN requires parentheses");
-        }
-        const argResult = Parser.#parseExpression(remainingExpr.substring(1), options);
-        if (argResult.remainingExpr.length === 0 || argResult.remainingExpr[0] !== ")") {
-          throw new Error("Missing closing parenthesis for SIN function");
-        }
-        const result = SIN(argResult.value, precision);
-        result._explicitInterval = true;
-        return {
-          value: result,
-          remainingExpr: argResult.remainingExpr.substring(1)
-        };
-      }
-      if (expr.startsWith("COS")) {
-        let remainingExpr = expr.substring(3);
-        let precision = undefined;
-        if (remainingExpr.startsWith("[")) {
-          const precisionMatch = remainingExpr.match(/^\[(-?\d+)\]/);
-          if (precisionMatch) {
-            precision = parseInt(precisionMatch[1], 10);
-            remainingExpr = remainingExpr.substring(precisionMatch[0].length);
-          }
-        }
-        if (!remainingExpr.startsWith("(")) {
-          throw new Error("COS requires parentheses");
-        }
-        const argResult = Parser.#parseExpression(remainingExpr.substring(1), options);
-        if (argResult.remainingExpr.length === 0 || argResult.remainingExpr[0] !== ")") {
-          throw new Error("Missing closing parenthesis for COS function");
-        }
-        const result = COS(argResult.value, precision);
-        result._explicitInterval = true;
-        return {
-          value: result,
-          remainingExpr: argResult.remainingExpr.substring(1)
-        };
-      }
-      if (expr.startsWith("ARCSIN")) {
-        let remainingExpr = expr.substring(6);
-        let precision = undefined;
-        if (remainingExpr.startsWith("[")) {
-          const precisionMatch = remainingExpr.match(/^\[(-?\d+)\]/);
-          if (precisionMatch) {
-            precision = parseInt(precisionMatch[1], 10);
-            remainingExpr = remainingExpr.substring(precisionMatch[0].length);
-          }
-        }
-        if (!remainingExpr.startsWith("(")) {
-          throw new Error("ARCSIN requires parentheses");
-        }
-        const argResult = Parser.#parseExpression(remainingExpr.substring(1), options);
-        if (argResult.remainingExpr.length === 0 || argResult.remainingExpr[0] !== ")") {
-          throw new Error("Missing closing parenthesis for ARCSIN function");
-        }
-        const result = ARCSIN(argResult.value, precision);
-        result._explicitInterval = true;
-        return {
-          value: result,
-          remainingExpr: argResult.remainingExpr.substring(1)
-        };
-      }
-      if (expr.startsWith("ARCCOS")) {
-        let remainingExpr = expr.substring(6);
-        let precision = undefined;
-        if (remainingExpr.startsWith("[")) {
-          const precisionMatch = remainingExpr.match(/^\[(-?\d+)\]/);
-          if (precisionMatch) {
-            precision = parseInt(precisionMatch[1], 10);
-            remainingExpr = remainingExpr.substring(precisionMatch[0].length);
-          }
-        }
-        if (!remainingExpr.startsWith("(")) {
-          throw new Error("ARCCOS requires parentheses");
-        }
-        const argResult = Parser.#parseExpression(remainingExpr.substring(1), options);
-        if (argResult.remainingExpr.length === 0 || argResult.remainingExpr[0] !== ")") {
-          throw new Error("Missing closing parenthesis for ARCCOS function");
-        }
-        const result = ARCCOS(argResult.value, precision);
-        result._explicitInterval = true;
-        return {
-          value: result,
-          remainingExpr: argResult.remainingExpr.substring(1)
-        };
-      }
-      if (expr.startsWith("TAN")) {
-        let remainingExpr = expr.substring(3);
-        let precision = undefined;
-        if (remainingExpr.startsWith("[")) {
-          const precisionMatch = remainingExpr.match(/^\[(-?\d+)\]/);
-          if (precisionMatch) {
-            precision = parseInt(precisionMatch[1], 10);
-            remainingExpr = remainingExpr.substring(precisionMatch[0].length);
-          }
-        }
-        if (!remainingExpr.startsWith("(")) {
-          throw new Error("TAN requires parentheses");
-        }
-        const argResult = Parser.#parseExpression(remainingExpr.substring(1), options);
-        if (argResult.remainingExpr.length === 0 || argResult.remainingExpr[0] !== ")") {
-          throw new Error("Missing closing parenthesis for TAN function");
-        }
-        const result = TAN(argResult.value, precision);
-        result._explicitInterval = true;
-        return {
-          value: result,
-          remainingExpr: argResult.remainingExpr.substring(1)
-        };
-      }
-      if (expr.startsWith("ARCTAN")) {
-        let remainingExpr = expr.substring(6);
-        let precision = undefined;
-        if (remainingExpr.startsWith("[")) {
-          const precisionMatch = remainingExpr.match(/^\[(-?\d+)\]/);
-          if (precisionMatch) {
-            precision = parseInt(precisionMatch[1], 10);
-            remainingExpr = remainingExpr.substring(precisionMatch[0].length);
-          }
-        }
-        if (!remainingExpr.startsWith("(")) {
-          throw new Error("ARCTAN requires parentheses");
-        }
-        const argResult = Parser.#parseExpression(remainingExpr.substring(1), options);
-        if (argResult.remainingExpr.length === 0 || argResult.remainingExpr[0] !== ")") {
-          throw new Error("Missing closing parenthesis for ARCTAN function");
-        }
-        const result = ARCTAN(argResult.value, precision);
-        result._explicitInterval = true;
-        return {
-          value: result,
-          remainingExpr: argResult.remainingExpr.substring(1)
-        };
-      }
-    }
-    if (expr.includes("[") && expr.includes("]")) {
-      const baseMatch = expr.match(/^([-\w./:^]+(?::[-\w./:^]+)?)\[(\d+)\]/);
-      if (baseMatch) {
-        throw new Error("Bracket base notation (Value[Base]) is no longer supported. Use prefix notation (0xValue, 0bValue) or the BASE command.");
-      }
-      const uncertaintyMatch = expr.match(/^(-?[@\w./:^]+)\[([^\]]+)\]((?:[Ee][+-]?[\w]+|\_?\^-?[\w]+)?)/);
-      if (uncertaintyMatch) {
-        const fullMatch = uncertaintyMatch[0];
-        try {
-          const result = parseDecimalUncertainty(fullMatch, options);
-          return {
-            value: result,
-            remainingExpr: expr.substring(fullMatch.length)
-          };
-        } catch (error) {
-          throw error;
-        }
-      }
-    }
-    if (expr[0] === "-" && !expr.includes("[") && !expr.includes(":")) {
-      const factorResult = Parser.#parseFactor(expr.substring(1), options);
-      let negatedValue;
-      if (options.typeAware && factorResult.value instanceof Integer) {
-        negatedValue = factorResult.value.negate();
-      } else if (options.typeAware && factorResult.value instanceof Rational) {
-        negatedValue = factorResult.value.negate();
-        if (factorResult.value._explicitFraction) {
-          negatedValue._explicitFraction = true;
-        }
-      } else {
-        const negOne = new Rational(-1);
-        const negInterval = RationalInterval.point(negOne);
-        negatedValue = negInterval.multiply(factorResult.value);
-      }
-      return {
-        value: negatedValue,
-        remainingExpr: factorResult.remainingExpr
-      };
-    }
-    const numberResult = Parser.#parseInterval(expr, options);
-    if (numberResult.remainingExpr.length > 0 && (numberResult.remainingExpr[0] === "E" || numberResult.remainingExpr.startsWith("TE") || numberResult.remainingExpr.startsWith("_^"))) {
-      const eResult = Parser.#parseENotation(numberResult.value, numberResult.remainingExpr, options);
-      let factorialResult2 = eResult;
-      if (factorialResult2.remainingExpr.length > 1 && factorialResult2.remainingExpr.substring(0, 2) === "!!") {
-        if (factorialResult2.value instanceof Integer) {
-          factorialResult2 = {
-            value: factorialResult2.value.doubleFactorial(),
-            remainingExpr: factorialResult2.remainingExpr.substring(2)
-          };
-        } else if (factorialResult2.value instanceof Rational && factorialResult2.value.denominator === 1n) {
-          const intValue = new Integer(factorialResult2.value.numerator);
-          factorialResult2 = {
-            value: intValue.doubleFactorial().toRational(),
-            remainingExpr: factorialResult2.remainingExpr.substring(2)
-          };
-        } else if (factorialResult2.value.low && factorialResult2.value.high && factorialResult2.value.low.equals(factorialResult2.value.high) && factorialResult2.value.low.denominator === 1n) {
-          const intValue = new Integer(factorialResult2.value.low.numerator);
-          const factorialValue = intValue.doubleFactorial();
-          const IntervalClass = factorialResult2.value.constructor;
-          factorialResult2 = {
-            value: new IntervalClass(factorialValue.toRational(), factorialValue.toRational()),
-            remainingExpr: factorialResult2.remainingExpr.substring(2)
-          };
-        } else {
-          throw new Error("Double factorial is not defined for negative integers");
-        }
-      } else if (factorialResult2.remainingExpr.length > 0 && factorialResult2.remainingExpr[0] === "!") {
-        if (factorialResult2.value instanceof Integer) {
-          factorialResult2 = {
-            value: factorialResult2.value.factorial(),
-            remainingExpr: factorialResult2.remainingExpr.substring(1)
-          };
-        } else if (factorialResult2.value instanceof Rational && factorialResult2.value.denominator === 1n) {
-          const intValue = new Integer(factorialResult2.value.numerator);
-          factorialResult2 = {
-            value: intValue.factorial().toRational(),
-            remainingExpr: factorialResult2.remainingExpr.substring(1)
-          };
-        } else if (factorialResult2.value.low && factorialResult2.value.high && factorialResult2.value.low.equals(factorialResult2.value.high) && factorialResult2.value.low.denominator === 1n) {
-          const intValue = new Integer(factorialResult2.value.low.numerator);
-          const factorialValue = intValue.factorial();
-          const IntervalClass = factorialResult2.value.constructor;
-          factorialResult2 = {
-            value: new IntervalClass(factorialValue.toRational(), factorialValue.toRational()),
-            remainingExpr: factorialResult2.remainingExpr.substring(1)
-          };
-        } else {
-          throw new Error("Factorial is not defined for negative integers");
-        }
-      }
-      if (factorialResult2.remainingExpr.length > 0) {
-        if (factorialResult2.remainingExpr[0] === "^") {
-          const powerExpr = factorialResult2.remainingExpr.substring(1);
-          let powerResult;
-          let isIntegerExponent = false;
-          try {
-            powerResult = Parser.#parseExponent(powerExpr);
-            isIntegerExponent = true;
-          } catch (e) {
-            powerResult = Parser.#parseExponentExpression(powerExpr, options);
-            isIntegerExponent = false;
-          }
-          const isZeroBase = factorialResult2.value instanceof Integer && factorialResult2.value.value === 0n || factorialResult2.value instanceof Rational && factorialResult2.value.numerator === 0n || factorialResult2.value.low && factorialResult2.value.high && factorialResult2.value.low.equals(new Rational(0)) && factorialResult2.value.high.equals(new Rational(0));
-          const isZeroExponent = isIntegerExponent ? powerResult.value === 0n : powerResult.value instanceof Rational && powerResult.value.numerator === 0n || powerResult.value instanceof Integer && powerResult.value.value === 0n;
-          if (isZeroBase && isZeroExponent) {
-            throw new Error("Zero cannot be raised to the power of zero");
-          }
-          let result;
-          if (isIntegerExponent) {
-            result = factorialResult2.value.pow(powerResult.value);
-          } else {
-            const precision = options.precision || DEFAULT_PRECISION;
-            result = rationalIntervalPower(factorialResult2.value, powerResult.value, precision);
-          }
-          return {
-            value: result,
-            remainingExpr: powerResult.remainingExpr
-          };
-        } else if (factorialResult2.remainingExpr.length > 1 && factorialResult2.remainingExpr[0] === "*" && factorialResult2.remainingExpr[1] === "*") {
-          const powerExpr = factorialResult2.remainingExpr.substring(2);
-          const powerResult = Parser.#parseExponent(powerExpr);
-          const isZeroExponent = powerResult.value === 0n;
-          if (isZeroExponent) {
-            throw new Error("Multiplicative exponentiation requires at least one factor");
-          }
-          let base = factorialResult2.value;
-          if (!(base instanceof RationalInterval)) {
-            base = RationalInterval.point(base instanceof Integer ? base.toRational() : base);
-          }
-          const result = base.mpow(powerResult.value);
-          result._skipPromotion = true;
-          return {
-            value: result,
-            remainingExpr: powerResult.remainingExpr
-          };
-        }
-      }
-      return factorialResult2;
-    }
-    let factorialResult = numberResult;
-    if (factorialResult.remainingExpr.length > 1 && factorialResult.remainingExpr.substring(0, 2) === "!!") {
-      if (factorialResult.value instanceof Integer) {
-        factorialResult = {
-          value: factorialResult.value.doubleFactorial(),
-          remainingExpr: factorialResult.remainingExpr.substring(2)
-        };
-      } else if (factorialResult.value instanceof Rational && factorialResult.value.denominator === 1n) {
-        const intValue = new Integer(factorialResult.value.numerator);
-        factorialResult = {
-          value: intValue.doubleFactorial().toRational(),
-          remainingExpr: factorialResult.remainingExpr.substring(2)
-        };
-      } else if (factorialResult.value.low && factorialResult.value.high && factorialResult.value.low.equals(factorialResult.value.high) && factorialResult.value.low.denominator === 1n) {
-        const intValue = new Integer(factorialResult.value.low.numerator);
-        const factorialValue = intValue.doubleFactorial();
-        const IntervalClass = factorialResult.value.constructor;
-        factorialResult = {
-          value: new IntervalClass(factorialValue.toRational(), factorialValue.toRational()),
-          remainingExpr: factorialResult.remainingExpr.substring(2)
-        };
-      } else {
-        throw new Error("Double factorial is not defined for negative integers");
-      }
-    } else if (factorialResult.remainingExpr.length > 0 && factorialResult.remainingExpr[0] === "!") {
-      if (factorialResult.value instanceof Integer) {
-        factorialResult = {
-          value: factorialResult.value.factorial(),
-          remainingExpr: factorialResult.remainingExpr.substring(1)
-        };
-      } else if (factorialResult.value instanceof Rational && factorialResult.value.denominator === 1n) {
-        const intValue = new Integer(factorialResult.value.numerator);
-        factorialResult = {
-          value: intValue.factorial().toRational(),
-          remainingExpr: factorialResult.remainingExpr.substring(1)
-        };
-      } else if (factorialResult.value.low && factorialResult.value.high && factorialResult.value.low.equals(factorialResult.value.high) && factorialResult.value.low.denominator === 1n) {
-        const intValue = new Integer(factorialResult.value.low.numerator);
-        const factorialValue = intValue.factorial();
-        const IntervalClass = factorialResult.value.constructor;
-        factorialResult = {
-          value: new IntervalClass(factorialValue.toRational(), factorialValue.toRational()),
-          remainingExpr: factorialResult.remainingExpr.substring(1)
-        };
-      } else {
-        throw new Error("Factorial is not defined for negative integers");
-      }
-    }
-    if (factorialResult.remainingExpr.length > 0) {
-      if (factorialResult.remainingExpr[0] === "^") {
-        const powerExpr = factorialResult.remainingExpr.substring(1);
-        let powerResult;
-        let isIntegerExponent = false;
-        if (powerExpr.startsWith("(")) {
-          powerResult = Parser.#parseExpression(powerExpr.substring(1), options);
-          if (powerResult.remainingExpr.length === 0 || powerResult.remainingExpr[0] !== ")") {
-            throw new Error("Missing closing parenthesis in exponent");
-          }
-          powerResult.remainingExpr = powerResult.remainingExpr.substring(1);
-          isIntegerExponent = false;
-        } else {
-          try {
-            powerResult = Parser.#parseExponent(powerExpr);
-            isIntegerExponent = true;
-          } catch (e) {
-            powerResult = Parser.#parseExponentExpression(powerExpr, options);
-            isIntegerExponent = false;
-          }
-        }
-        const isZeroBase = factorialResult.value instanceof Integer && factorialResult.value.value === 0n || factorialResult.value instanceof Rational && factorialResult.value.numerator === 0n || factorialResult.value.low && factorialResult.value.high && factorialResult.value.low.equals(new Rational(0)) && factorialResult.value.high.equals(new Rational(0));
-        const isZeroExponent = isIntegerExponent ? powerResult.value === 0n : powerResult.value instanceof Rational && powerResult.value.numerator === 0n || powerResult.value instanceof Integer && powerResult.value.value === 0n;
-        if (isZeroBase && isZeroExponent) {
-          throw new Error("Zero cannot be raised to the power of zero");
-        }
-        let result;
-        if (isIntegerExponent) {
-          result = factorialResult.value.pow(powerResult.value);
-        } else {
-          const precision = options.precision || DEFAULT_PRECISION;
-          result = rationalIntervalPower(factorialResult.value, powerResult.value, precision);
-          result._skipPromotion = true;
-        }
-        return {
-          value: result,
-          remainingExpr: powerResult.remainingExpr
-        };
-      } else if (factorialResult.remainingExpr.length > 1 && factorialResult.remainingExpr[0] === "*" && factorialResult.remainingExpr[1] === "*") {
-        const powerExpr = factorialResult.remainingExpr.substring(2);
-        let powerResult;
-        if (powerExpr.startsWith("(")) {
-          powerResult = Parser.#parseExpression(powerExpr.substring(1), options);
-          if (powerResult.remainingExpr.length === 0 || powerResult.remainingExpr[0] !== ")") {
-            throw new Error("Missing closing parenthesis in exponent");
-          }
-          powerResult.remainingExpr = powerResult.remainingExpr.substring(1);
-        } else {
-          try {
-            powerResult = Parser.#parseExponent(powerExpr);
-          } catch (e) {
-            powerResult = Parser.#parseExpression(powerExpr, options);
-          }
-        }
-        let base = factorialResult.value;
-        const isIntegerExponent = powerResult.value instanceof Integer || powerResult.value instanceof Rational && powerResult.value.denominator === 1n;
-        const isZeroExponent = powerResult.value instanceof Integer && powerResult.value.value === 0n || powerResult.value instanceof Rational && powerResult.value.numerator === 0n;
-        if (isZeroExponent) {
-          throw new Error("Multiplicative exponentiation requires at least one factor");
-        }
-        let result;
-        if (isIntegerExponent) {
-          if (!(base instanceof RationalInterval)) {
-            base = RationalInterval.point(base instanceof Integer ? base.toRational() : base);
-          }
-          const exponentBigInt = powerResult.value instanceof Integer ? powerResult.value.value : powerResult.value.numerator;
-          result = base.mpow(exponentBigInt);
-        } else {
-          const precision = options.precision || DEFAULT_PRECISION;
-          result = rationalIntervalPower(base, powerResult.value, precision);
-        }
-        result._skipPromotion = true;
-        return {
-          value: result,
-          remainingExpr: powerResult.remainingExpr
-        };
-      }
-    }
-    return factorialResult;
-  }
-  static #parseExponent(expr) {
-    let i = 0;
-    let isNegative2 = false;
-    if (expr.length > 0 && expr[0] === "-") {
-      isNegative2 = true;
-      i++;
-    }
-    let exponentStr = "";
-    while (i < expr.length && /\d/.test(expr[i])) {
-      exponentStr += expr[i];
-      i++;
-    }
-    if (exponentStr.length === 0) {
-      throw new Error("Invalid exponent");
-    }
-    const exponent = isNegative2 ? -BigInt(exponentStr) : BigInt(exponentStr);
-    if (exponent === 0n) {
-      throw new Error("Multiplicative exponentiation requires at least one factor");
-    }
-    return {
-      value: exponent,
-      remainingExpr: expr.substring(i)
-    };
-  }
-  static #parseExponentExpression(expr, options) {
-    return Parser.#parseFactor(expr, options);
-  }
-  static #promoteType(value, options = {}) {
-    if (!options.typeAware) {
+    if (part < values.length)
+      tokens.push({ kind: "value", value: coreValue(values[part]), text: `\${${part}}` });
+  });
+  return tokens;
+}
+function coreValue(value) {
+  if (value instanceof Integer || value instanceof Rational || value instanceof RationalInterval)
+    return value;
+  if (value?.isCertifiedApproximation === true)
+    return value;
+  if (typeof value === "bigint")
+    return new Integer(value);
+  if (typeof value === "number" && Number.isSafeInteger(value))
+    return new Integer(value);
+  if (typeof value === "string")
+    return parseNumber(value);
+  throw new TypeError(`R: cannot use ${typeof value === "number" ? `inexact number ${value}` : typeof value} as an exact value; pass a Core value, bigint, safe integer or literal string`);
+}
+var toRationalish = (value) => value instanceof Integer ? value.toRational() : value;
+function interval(left, right) {
+  const [low, high] = [toRationalish(left), toRationalish(right)];
+  if (!(low instanceof Rational) || !(high instanceof Rational))
+    throw new TypeError("R: ':' joins two scalar endpoints");
+  return new RationalInterval(low, high);
+}
+function power(base, exponent) {
+  if (!(exponent instanceof Integer))
+    throw new TypeError("R: '^' needs an Integer exponent (exact powers only)");
+  return base.pow(exponent.value);
+}
+function R(strings, ...values) {
+  const tokens = tokenize(strings, values);
+  let position = 0;
+  const peek = () => tokens[position];
+  const takeOp = (ops) => peek()?.kind === "op" && ops.includes(peek().value) ? tokens[position++].value : null;
+  function primary() {
+    const token = tokens[position++];
+    if (!token)
+      throw new SyntaxError("R: expression ended early");
+    if (token.kind === "value")
+      return token.value;
+    if (token.value === "(") {
+      const value = sum();
+      if (takeOp(")") === null)
+        throw new SyntaxError("R: missing ')'");
       return value;
     }
-    if (value && value._skipPromotion) {
-      return value;
-    }
-    if (value instanceof RationalInterval && value.low.equals(value.high)) {
-      if (value._explicitInterval) {
-        return value;
-      }
-      if (value.low.denominator === 1n) {
-        return new Integer(value.low.numerator);
-      } else {
-        return value.low;
-      }
-    }
-    if (value instanceof Rational && value.denominator === 1n) {
-      if (value._explicitFraction) {
-        return value;
-      }
-      return new Integer(value.numerator);
+    throw new SyntaxError(`R: unexpected '${token.value}'`);
+  }
+  function postfix() {
+    let value = primary();
+    while (takeOp("!") !== null) {
+      if (!(value instanceof Integer))
+        throw new TypeError("R: '!' needs an Integer");
+      value = value.factorial();
     }
     return value;
   }
-  static #parseENotation(value, expr, options = {}) {
-    if (options.inputBase && options.inputBase !== BaseSystem.DECIMAL) {
-      return Parser.#parseBaseAwareENotation(value, expr, options);
-    }
-    let spaceBeforeE = false;
-    let startIndex = 1;
-    if (expr.startsWith("TE")) {
-      spaceBeforeE = true;
-      startIndex = 2;
-    } else if (expr[0] === "E") {
-      spaceBeforeE = false;
-      startIndex = 1;
-    } else if (expr.startsWith("_^")) {
-      spaceBeforeE = false;
-      startIndex = 2;
-    } else {
-      throw new Error("Expected E notation");
-    }
-    const exponentResult = Parser.#parseExponent(expr.substring(startIndex));
-    const exponent = exponentResult.value;
-    let result;
-    if (value.E && typeof value.E === "function") {
-      result = value.E(exponent);
-    } else {
-      let powerOf10;
-      if (exponent >= 0n) {
-        powerOf10 = new Rational(10n ** exponent);
-      } else {
-        powerOf10 = new Rational(1n, 10n ** -exponent);
-      }
-      result = value.multiply(powerOf10);
-    }
-    return {
-      value: Parser.#promoteType(result, options),
-      remainingExpr: exponentResult.remainingExpr
-    };
+  function exponent() {
+    const base = postfix();
+    return takeOp("^") !== null ? power(base, unary()) : base;
   }
-  static #parseBaseAwareENotation(value, expr, options = {}) {
-    const baseSystem = options.inputBase;
-    if (!baseSystem) {
-      throw new Error("Base-aware E notation requires inputBase option");
-    }
-    let notationType;
-    let startIndex;
-    if (expr.startsWith("_^")) {
-      notationType = "_^";
-      startIndex = 2;
-    } else if (baseSystem.base === 10 && (expr.startsWith("E") || expr.startsWith("e"))) {
-      notationType = "E";
-      startIndex = 1;
-    } else {
-      if (baseSystem.base === 10) {
-        throw new Error("Expected E or _^ notation");
-      } else {
-        throw new Error("Scientific notation in non-decimal bases requires _^ separator (e.g. 5_^2)");
-      }
-    }
-    let endIndex = startIndex;
-    if (endIndex < expr.length && expr[endIndex] === "-") {
-      endIndex++;
-    }
-    while (endIndex < expr.length) {
-      const char = expr[endIndex];
-      if (baseSystem.charMap.has(char)) {
-        endIndex++;
-      } else {
-        break;
-      }
-    }
-    if (endIndex === startIndex || endIndex === startIndex + 1 && expr[startIndex] === "-") {
-      throw new Error(`Missing exponent after ${notationType} notation`);
-    }
-    const exponentStr = expr.substring(startIndex, endIndex);
-    const testExponentStr = exponentStr.startsWith("-") ? exponentStr.substring(1) : exponentStr;
-    if (!baseSystem.isValidString(testExponentStr)) {
-      throw new Error(`Invalid exponent "${exponentStr}" for base ${baseSystem.base}`);
-    }
-    let exponentDecimal;
-    try {
-      exponentDecimal = baseSystem.toDecimal(exponentStr);
-    } catch (error) {
-      throw new Error(`Failed to parse exponent "${exponentStr}": ${error.message}`);
-    }
-    let powerOfBase;
-    const baseBigInt = BigInt(baseSystem.base);
-    if (exponentDecimal >= 0n) {
-      powerOfBase = new Rational(baseBigInt ** exponentDecimal);
-    } else {
-      powerOfBase = new Rational(1n, baseBigInt ** -exponentDecimal);
-    }
-    let valueRational;
-    if (value instanceof Integer) {
-      valueRational = value.toRational();
-    } else if (value instanceof Rational) {
-      valueRational = value;
-    } else {
-      throw new Error(`${notationType} notation can only be applied to simple numbers, not intervals`);
-    }
-    const result = valueRational.multiply(powerOfBase);
-    return {
-      value: Parser.#promoteType(result, options),
-      remainingExpr: expr.substring(endIndex)
-    };
+  function unary() {
+    return takeOp("-") !== null ? unary().negate() : (takeOp("+"), exponent());
   }
-  static #parseInterval(expr, options = {}) {
-    if (expr.includes("[") && expr.includes("]") && /^-?[@\w./:^]+\[/.test(expr)) {
-      try {
-        const result = parseDecimalUncertainty(expr, options);
-        return {
-          value: result,
-          remainingExpr: ""
-        };
-      } catch {}
-    }
-    if (expr.includes(".~")) {
-      if (expr.includes(":")) {
-        const colonIndex = expr.indexOf(":");
-        const leftPart = expr.substring(0, colonIndex);
-        const rightPart = expr.substring(colonIndex + 1);
-        if (leftPart.includes(".~") || rightPart.includes(".~")) {
-          try {
-            let leftResult;
-            if (leftPart.includes(".~")) {
-              leftResult = Parser.#parseContinuedFraction(leftPart, options);
-            } else {
-              leftResult = Parser.#parseInterval(leftPart, options);
-            }
-            let rightResult;
-            if (rightPart.includes(".~")) {
-              rightResult = Parser.#parseContinuedFraction(rightPart, options);
-            } else {
-              rightResult = Parser.#parseInterval(rightPart, options);
-            }
-            let leftRational, rightRational;
-            if (leftResult.value instanceof Integer) {
-              leftRational = leftResult.value.toRational();
-            } else if (leftResult.value instanceof Rational) {
-              leftRational = leftResult.value;
-            } else {
-              throw new Error("Left side must evaluate to a rational");
-            }
-            if (rightResult.value instanceof Integer) {
-              rightRational = rightResult.value.toRational();
-            } else if (rightResult.value instanceof Rational) {
-              rightRational = rightResult.value;
-            } else if (rightResult.value instanceof RationalInterval && rightResult.value.isPoint()) {
-              rightRational = rightResult.value.low;
-            } else {
-              throw new Error("Right side must evaluate to a rational");
-            }
-            const interval2 = new RationalInterval(leftRational, rightRational);
-            return {
-              value: interval2,
-              remainingExpr: rightResult.remainingExpr
-            };
-          } catch (error) {}
-        }
-      }
-      try {
-        const cfResult = Parser.#parseContinuedFraction(expr, options);
-        return cfResult;
-      } catch (error) {}
-    }
-    if (expr.includes(".") && !expr.includes("#") && !expr.includes(":") && !expr.includes("[") && (!options.inputBase || options.inputBase === BaseSystem.DECIMAL)) {
-      let endIndex = 0;
-      let hasDecimalPoint = false;
-      if (expr[endIndex] === "-") {
-        endIndex++;
-      }
-      const baseSystem = options.inputBase || BaseSystem.DECIMAL;
-      while (endIndex < expr.length) {
-        const char = expr[endIndex];
-        if (baseSystem.charMap.has(char)) {
-          endIndex++;
-        } else if (char === "." && !hasDecimalPoint && endIndex + 1 < expr.length && expr[endIndex + 1] !== ".") {
-          hasDecimalPoint = true;
-          endIndex++;
-        } else {
-          break;
-        }
-      }
-      if (hasDecimalPoint && endIndex > (expr[0] === "-" ? 2 : 1)) {
-        const decimalStr = expr.substring(0, endIndex);
-        try {
-          if (options.inputBase && options.inputBase !== BaseSystem.DECIMAL) {
-            const result = parseBaseNotation(decimalStr, options.inputBase, options);
-            return {
-              value: result,
-              remainingExpr: expr.substring(endIndex)
-            };
-          } else if (options.typeAware) {
-            const result = new Rational(decimalStr);
-            return {
-              value: result,
-              remainingExpr: expr.substring(endIndex)
-            };
-          } else {
-            const isNegative2 = decimalStr.startsWith("-");
-            const absDecimalStr = isNegative2 ? decimalStr.substring(1) : decimalStr;
-            const result = parseNonRepeatingDecimal(absDecimalStr, isNegative2);
-            return {
-              value: result,
-              remainingExpr: expr.substring(endIndex)
-            };
-          }
-        } catch (error) {}
-      }
-    }
-    if (expr.includes("#") && expr.includes(":") && /^-?[\d.]/.test(expr)) {
-      const colonIndex = expr.indexOf(":");
-      if (colonIndex > 0) {
-        const beforeColon = expr.substring(0, colonIndex);
-        const afterColonStart = expr.substring(colonIndex + 1);
-        if (/^-?[\d.#]+$/.test(beforeColon) && /^-?[\d.#]/.test(afterColonStart) && (beforeColon.includes("#") || afterColonStart.includes("#"))) {
-          try {
-            const possibleInterval = parseRepeatingDecimal(expr);
-            if (possibleInterval instanceof RationalInterval) {
-              let endIndex = expr.length;
-              for (let i = 1;i < expr.length; i++) {
-                const testExpr = expr.substring(0, i);
-                try {
-                  const testResult = parseRepeatingDecimal(testExpr);
-                  if (testResult instanceof RationalInterval) {
-                    if (i === expr.length || !/[\d#.\-]/.test(expr[i])) {
-                      endIndex = i;
-                      const finalResult = parseRepeatingDecimal(expr.substring(0, endIndex));
-                      if (finalResult instanceof RationalInterval) {
-                        return {
-                          value: finalResult,
-                          remainingExpr: expr.substring(endIndex)
-                        };
-                      }
-                    }
-                  }
-                } catch {}
-              }
-              try {
-                const result = parseRepeatingDecimal(expr);
-                if (result instanceof RationalInterval) {
-                  return {
-                    value: result,
-                    remainingExpr: ""
-                  };
-                }
-              } catch {}
-            }
-          } catch {}
-        }
-      }
-    }
-    const debugMatch = expr.trim().match(/^(-?)0[a-zA-Z]/);
-    if (options.inputBase && options.inputBase !== BaseSystem.DECIMAL && !expr.includes("[") && !expr.includes("#") && !debugMatch) {
-      try {
-        let endIndex = 0;
-        let hasDecimalPoint = false;
-        let hasMixedNumber = false;
-        let hasFraction = false;
-        let hasColon = false;
-        if (expr[endIndex] === "-") {
-          endIndex++;
-        }
-        while (endIndex < expr.length) {
-          const char = expr[endIndex];
-          if (options.inputBase.charMap.has(char)) {
-            endIndex++;
-          } else if (/[0-9]/.test(char)) {
-            endIndex++;
-          } else if (char === "." && endIndex + 1 < expr.length && expr[endIndex + 1] === ".") {
-            if (hasMixedNumber || hasDecimalPoint || hasFraction || hasColon)
-              break;
-            hasMixedNumber = true;
-            endIndex += 2;
-          } else if (char === "." && !hasDecimalPoint && !hasMixedNumber) {
-            hasDecimalPoint = true;
-            endIndex++;
-          } else if (char === "/" && !hasFraction) {
-            hasFraction = true;
-            endIndex++;
-          } else if (char === ":" && !hasColon && !hasMixedNumber) {
-            hasColon = true;
-            hasDecimalPoint = false;
-            hasFraction = false;
-            endIndex++;
-          } else {
-            break;
-          }
-        }
-        if (endIndex > (expr[0] === "-" ? 1 : 0)) {
-          const numberStr = expr.substring(0, endIndex);
-          const testStr = numberStr.startsWith("-") ? numberStr.substring(1) : numberStr;
-          const parts = testStr.split(/[\.\/\:]/);
-          const isValidInBase = parts.every((part, index) => {
-            if (part === "") {
-              return testStr.includes(".") && (index === 0 || index === parts.length - 1);
-            }
-            return part.split("").every((char) => options.inputBase.charMap.has(char));
-          });
-          if (isValidInBase) {
-            const result = parseBaseNotation(numberStr, options.inputBase, options);
-            return {
-              value: result,
-              remainingExpr: expr.substring(endIndex)
-            };
-          } else if (options.inputBase && options.inputBase !== BaseSystem.DECIMAL) {
-            throw new Error(`Invalid number format for ${options.inputBase.name}`);
-          }
-        } else if (options.inputBase && options.inputBase !== BaseSystem.DECIMAL) {
-          const firstChar = expr.startsWith("-") ? expr[1] : expr[0];
-          if (/[0-9]/.test(firstChar)) {
-            throw new Error(`Invalid number format for ${options.inputBase.name}`);
-          }
-        }
-      } catch (error) {}
-    }
-    const firstResult = Parser.#parseRational(expr, options);
-    let firstValue = firstResult.value;
-    let remainingAfterFirst = firstResult.remainingExpr;
-    if (remainingAfterFirst.length > 0 && remainingAfterFirst[0] === "E") {
-      let eEndIndex = 1;
-      if (eEndIndex < remainingAfterFirst.length && remainingAfterFirst[eEndIndex] === "-") {
-        eEndIndex++;
-      }
-      while (eEndIndex < remainingAfterFirst.length && /\d/.test(remainingAfterFirst[eEndIndex])) {
-        eEndIndex++;
-      }
-      if (eEndIndex < remainingAfterFirst.length && remainingAfterFirst[eEndIndex] === ":") {
-        const eNotationPart = remainingAfterFirst.substring(0, eEndIndex);
-        const firstInterval = RationalInterval.point(firstResult.value);
-        const eResult = Parser.#parseENotation(firstInterval, eNotationPart, options);
-        if (eResult.value instanceof RationalInterval) {
-          firstValue = eResult.value.low;
-        } else if (eResult.value instanceof Rational) {
-          firstValue = eResult.value;
-        } else if (eResult.value instanceof Integer) {
-          firstValue = eResult.value.toRational();
-        } else {
-          firstValue = eResult.value;
-        }
-        remainingAfterFirst = remainingAfterFirst.substring(eEndIndex);
-      }
-    }
-    if (remainingAfterFirst.length === 0 || remainingAfterFirst[0] !== ":") {
-      if (options.typeAware) {
-        if (firstValue instanceof Rational && firstValue.denominator === 1n) {
-          if (firstValue._explicitFraction) {
-            return {
-              value: firstValue,
-              remainingExpr: remainingAfterFirst
-            };
-          }
-          return {
-            value: new Integer(firstValue.numerator),
-            remainingExpr: remainingAfterFirst
-          };
-        }
-        return {
-          value: firstValue,
-          remainingExpr: remainingAfterFirst
-        };
-      } else {
-        const pointValue = RationalInterval.point(firstValue);
-        return {
-          value: pointValue,
-          remainingExpr: remainingAfterFirst
-        };
-      }
-    }
-    const secondRationalExpr = remainingAfterFirst.substring(1);
-    const secondResult = Parser.#parseRational(secondRationalExpr, options);
-    let secondValue = secondResult.value;
-    let remainingExpr = secondResult.remainingExpr;
-    if (remainingExpr.length > 0 && (remainingExpr[0] === "E" || remainingExpr.startsWith("_^"))) {
-      const secondInterval = RationalInterval.point(secondResult.value);
-      const eResult = Parser.#parseENotation(secondInterval, remainingExpr, options);
-      if (eResult.value instanceof RationalInterval) {
-        secondValue = eResult.value.low;
-      } else if (eResult.value instanceof Rational) {
-        secondValue = eResult.value;
-      } else if (eResult.value instanceof Integer) {
-        secondValue = eResult.value.toRational();
-      } else {
-        secondValue = eResult.value;
-      }
-      remainingExpr = eResult.remainingExpr;
-    }
-    const interval = new RationalInterval(firstValue, secondValue);
-    interval._explicitInterval = true;
-    return {
-      value: interval,
-      remainingExpr
-    };
+  function product() {
+    let value = unary();
+    for (let op;(op = takeOp("*/")) !== null; )
+      value = op === "*" ? value.multiply(unary()) : value.divide(unary());
+    return value;
   }
-  static #parseRational(expr, options = {}) {
-    expr = expr.trim();
-    const prefixMatch = expr.match(/^(-?)0([a-zA-Z])/);
-    let isExplicitPrefix = false;
-    if (prefixMatch) {
-      const isNegative3 = prefixMatch[1] === "-";
-      const prefix = prefixMatch[2];
-      const registeredBase = BaseSystem.getSystemForPrefix(prefix);
-      if (registeredBase) {
-        options = { ...options, inputBase: registeredBase };
-        isExplicitPrefix = true;
-        expr = (isNegative3 ? "-" : "") + expr.substring(prefixMatch[0].length);
-      } else if (prefix === "D") {
-        isExplicitPrefix = true;
-        expr = (isNegative3 ? "-" : "") + expr.substring(prefixMatch[0].length);
-      } else {
-        if (prefix.toLowerCase() !== "e") {
-          throw new Error(`Invalid or unregistered prefix '0${prefix}'`);
-        }
-      }
-    }
-    if (expr.length === 0) {
-      throw new Error("Unexpected end of expression");
-    }
-    if (options.inputBase && options.inputBase !== BaseSystem.DECIMAL && !expr.includes("[") && !expr.includes("#")) {
-      let endIndex = 0;
-      let hasDecimalPoint = false;
-      let hasMixedNumber = false;
-      let hasFraction = false;
-      let hasExponent = false;
-      let validationBase = options.inputBase;
-      if (expr[endIndex] === "-") {
-        endIndex++;
-      }
-      while (endIndex < expr.length) {
-        const char = expr[endIndex];
-        let isValidChar = validationBase.charMap.has(char);
-        if (!isValidChar) {
-          const baseUsesLowercase = validationBase.characters.some((ch) => ch >= "a" && ch <= "z");
-          const baseUsesUppercase = validationBase.characters.some((ch) => ch >= "A" && ch <= "Z");
-          if (baseUsesLowercase && !baseUsesUppercase && char >= "A" && char <= "Z") {
-            isValidChar = validationBase.charMap.has(char.toLowerCase());
-          } else if (baseUsesUppercase && !baseUsesLowercase && char >= "a" && char <= "z") {
-            isValidChar = validationBase.charMap.has(char.toUpperCase());
-          }
-        }
-        if (isValidChar) {
-          endIndex++;
-        } else if (char === "." && endIndex + 1 < expr.length && expr[endIndex + 1] === ".") {
-          if (hasMixedNumber || hasDecimalPoint || hasFraction)
-            break;
-          hasMixedNumber = true;
-          endIndex += 2;
-        } else if (char === "." && !hasDecimalPoint && !hasMixedNumber) {
-          hasDecimalPoint = true;
-          endIndex++;
-        } else if (char === "/" && !hasFraction) {
-          if (endIndex + 1 < expr.length) {
-            const nextChar = expr[endIndex + 1];
-            if (!validationBase.charMap.has(nextChar)) {
-              break;
-            }
-          }
-          hasFraction = true;
-          endIndex++;
-          if (endIndex + 1 < expr.length) {
-            const potentialPrefix = expr.substring(endIndex, endIndex + 2);
-            const subPrefixMatch = potentialPrefix.match(/^0([a-zA-Z])/);
-            if (subPrefixMatch) {
-              const prefixChar = subPrefixMatch[1];
-              const subBase = BaseSystem.getSystemForPrefix(prefixChar);
-              if (subBase || prefixChar === "D") {
-                if (subBase)
-                  validationBase = subBase;
-                endIndex += 2;
-              }
-            }
-          }
-        } else if (validationBase.characters.includes(char.toUpperCase()) && (char === "E" || char === "e")) {
-          endIndex++;
-        } else if (char === "E" && !options.disableENotation || char === "_" && endIndex + 1 < expr.length && expr[endIndex + 1] === "^") {
-          hasExponent = true;
-          endIndex += char === "_" ? 2 : 1;
-          if (endIndex < expr.length && (expr[endIndex] === "+" || expr[endIndex] === "-")) {
-            endIndex++;
-          }
-        } else if (/[0-9]/.test(char)) {
-          endIndex++;
-        } else {
-          break;
-        }
-      }
-      if (isExplicitPrefix && endIndex <= (expr[0] === "-" ? 1 : 0)) {
-        throw new Error(`Invalid number format for ${options.inputBase.name}`);
-      }
-      if (endIndex > (expr[0] === "-" ? 1 : 0)) {
-        const numberStr = expr.substring(0, endIndex);
-        const testStr = numberStr.startsWith("-") ? numberStr.substring(1) : numberStr;
-        const parts = testStr.split(/[\.\/]/);
-        let isValidInBase = true;
-        if (!isExplicitPrefix) {
-          isValidInBase = parts.every((part, index) => {
-            if (part === "") {
-              return testStr.includes(".") && (index === 0 || index === parts.length - 1 || testStr.includes(".."));
-            }
-            const baseUsesLowercase = options.inputBase.characters.some((char) => char >= "a" && char <= "z");
-            const baseUsesUppercase = options.inputBase.characters.some((char) => char >= "A" && char <= "Z");
-            return part.split("").every((char) => {
-              if (options.inputBase.charMap.has(char)) {
-                return true;
-              }
-              if (baseUsesLowercase && !baseUsesUppercase && char >= "A" && char <= "Z") {
-                return options.inputBase.charMap.has(char.toLowerCase());
-              }
-              if (baseUsesUppercase && !baseUsesLowercase && char >= "a" && char <= "z") {
-                return options.inputBase.charMap.has(char.toUpperCase());
-              }
-              return false;
-            });
-          });
-        }
-        if (isValidInBase) {
-          try {
-            const result = parseBaseNotation(numberStr, options.inputBase, options);
-            return {
-              value: result,
-              remainingExpr: expr.substring(endIndex)
-            };
-          } catch (error) {
-            if (isExplicitPrefix) {
-              throw error;
-            }
-          }
-        } else if (options.inputBase && options.inputBase !== BaseSystem.DECIMAL) {
-          throw new Error(`Invalid number format for ${options.inputBase.name}`);
-        }
-      } else if (options.inputBase && options.inputBase !== BaseSystem.DECIMAL) {
-        const firstChar = expr.startsWith("-") ? expr[1] : expr[0];
-        if (/[0-9]/.test(firstChar)) {
-          throw new Error(`Invalid number format for ${options.inputBase.name}`);
-        }
-      }
-    }
-    let hashIndex = expr.indexOf("#");
-    if (hashIndex !== -1) {
-      const beforeHash = expr.substring(0, hashIndex);
-      if (/^-?(\d+\.?\d*|\.\d+)$/.test(beforeHash)) {
-        let endIndex = hashIndex + 1;
-        while (endIndex < expr.length && /\d/.test(expr[endIndex])) {
-          endIndex++;
-        }
-        const repeatingDecimalStr = expr.substring(0, endIndex);
-        try {
-          const result = parseRepeatingDecimal(repeatingDecimalStr);
-          if (result instanceof RationalInterval) {
-            const midpoint = result.low.add(result.high).divide(new Rational(2));
-            return {
-              value: midpoint,
-              remainingExpr: expr.substring(endIndex)
-            };
-          } else {
-            return {
-              value: result,
-              remainingExpr: expr.substring(endIndex)
-            };
-          }
-        } catch (error) {
-          throw new Error(`Invalid repeating decimal: ${error.message}`);
-        }
-      }
-    }
-    let decimalIndex = expr.indexOf(".");
-    if (decimalIndex !== -1 && decimalIndex + 1 < expr.length && expr[decimalIndex + 1] !== ".") {
-      let endIndex = 0;
-      let hasDecimalPoint = false;
-      if (expr[endIndex] === "-") {
-        endIndex++;
-      }
-      while (endIndex < expr.length) {
-        if (/\d/.test(expr[endIndex])) {
-          endIndex++;
-        } else if (expr[endIndex] === "." && !hasDecimalPoint && endIndex + 1 < expr.length && expr[endIndex + 1] !== ".") {
-          hasDecimalPoint = true;
-          endIndex++;
-        } else {
-          break;
-        }
-      }
-      if (hasDecimalPoint && endIndex > (expr[0] === "-" ? 2 : 1)) {
-        const decimalStr = expr.substring(0, endIndex);
-        try {
-          const result = new Rational(decimalStr);
-          return {
-            value: result,
-            remainingExpr: expr.substring(endIndex)
-          };
-        } catch (error) {}
-      }
-    }
-    let i = 0;
-    let numeratorStr = "";
-    let denominatorStr = "";
-    let isNegative2 = false;
-    let wholePart = 0n;
-    let hasMixedForm = false;
-    if (expr[i] === "-") {
-      isNegative2 = true;
-      i++;
-    }
-    while (i < expr.length && /\d/.test(expr[i])) {
-      numeratorStr += expr[i];
-      i++;
-    }
-    if (numeratorStr.length === 0) {
-      throw new Error("Invalid rational number format");
-    }
-    if (i + 1 < expr.length && expr[i] === "." && expr[i + 1] === ".") {
-      hasMixedForm = true;
-      wholePart = isNegative2 ? -BigInt(numeratorStr) : BigInt(numeratorStr);
-      isNegative2 = false;
-      i += 2;
-      numeratorStr = "";
-      while (i < expr.length && /\d/.test(expr[i])) {
-        numeratorStr += expr[i];
-        i++;
-      }
-      if (numeratorStr.length === 0) {
-        throw new Error('Invalid mixed number format: missing numerator after ".."');
-      }
-    }
-    let explicitFraction = false;
-    if (i < expr.length && expr[i] === "/") {
-      explicitFraction = true;
-      i++;
-      if (i < expr.length && expr[i] === "S") {
-        if (hasMixedForm) {
-          throw new Error("Invalid mixed number format: missing denominator");
-        }
-        const numerator2 = isNegative2 ? -BigInt(numeratorStr) : BigInt(numeratorStr);
-        return {
-          value: new Rational(numerator2, 1n),
-          remainingExpr: expr.substring(i - 1)
-        };
-      }
-      if (i < expr.length && expr[i] === "(") {
-        if (hasMixedForm) {
-          throw new Error("Invalid mixed number format: missing denominator");
-        }
-        const numerator2 = isNegative2 ? -BigInt(numeratorStr) : BigInt(numeratorStr);
-        return {
-          value: new Rational(numerator2, 1n),
-          remainingExpr: expr.substring(i - 1)
-        };
-      }
-      while (i < expr.length && /\d/.test(expr[i])) {
-        denominatorStr += expr[i];
-        i++;
-      }
-      if (denominatorStr.length === 0) {
-        throw new Error("Invalid rational number format");
-      }
-      if (i < expr.length && expr[i] === "E") {
-        throw new Error("E notation not allowed directly after fraction without parentheses");
-      }
-    } else {
-      if (hasMixedForm) {
-        throw new Error("Invalid mixed number format: missing denominator");
-      }
-      denominatorStr = "1";
-    }
-    if (hasMixedForm && i < expr.length && expr[i] === "E") {
-      throw new Error("E notation not allowed directly after mixed number without parentheses");
-    }
-    let numerator, denominator;
-    if (hasMixedForm) {
-      numerator = BigInt(numeratorStr);
-      denominator = BigInt(denominatorStr);
-      const sign = wholePart < 0n ? -1n : 1n;
-      numerator = sign * ((wholePart.valueOf() < 0n ? -wholePart : wholePart) * denominator + numerator);
-    } else {
-      numerator = isNegative2 ? -BigInt(numeratorStr) : BigInt(numeratorStr);
-      denominator = BigInt(denominatorStr);
-    }
-    if (denominator === 0n) {
-      throw new Error("Denominator cannot be zero");
-    }
-    const rational = new Rational(numerator, denominator);
-    if (explicitFraction && denominator === 1n) {
-      rational._explicitFraction = true;
-    }
-    return {
-      value: rational,
-      remainingExpr: expr.substring(i)
-    };
+  function range() {
+    const value = product();
+    return takeOp(":") !== null ? interval(value, product()) : value;
   }
-  static #parseContinuedFraction(expr, options = {}) {
-    const cfMatch = expr.match(/^(-?\d+)\.~((?:\d+~?)*\d*)(.*)$/);
-    if (!cfMatch) {
-      throw new Error("Invalid continued fraction format");
-    }
-    const [fullMatch, integerPart, cfTermsStr, remaining] = cfMatch;
-    if (cfTermsStr === "") {
-      throw new Error("Continued fraction must have at least one term after .~");
-    }
-    if (cfTermsStr.endsWith("~")) {
-      throw new Error("Continued fraction cannot end with ~");
-    }
-    if (cfTermsStr.includes("~~")) {
-      throw new Error("Invalid continued fraction format: double tilde");
-    }
-    const cfArray = Parser.parseContinuedFraction(fullMatch.substring(0, fullMatch.length - remaining.length));
-    if (typeof Rational.fromContinuedFraction === "function") {
-      const rational = Rational.fromContinuedFraction(cfArray);
-      return {
-        value: rational,
-        remainingExpr: remaining
-      };
-    } else {
-      throw new Error("Continued fraction support not yet implemented in Rational class");
-    }
+  function sum() {
+    let value = range();
+    for (let op;(op = takeOp("+-")) !== null; )
+      value = op === "+" ? value.add(range()) : value.subtract(range());
+    return value;
   }
-  static parseContinuedFraction(cfString) {
-    const cfMatch = cfString.match(/^(-?\d+)\.~(.*)$/);
-    if (!cfMatch) {
-      throw new Error("Invalid continued fraction format");
-    }
-    const [, integerPart, cfTermsStr] = cfMatch;
-    const intPart = BigInt(integerPart);
-    if (cfTermsStr === "0") {
-      return [intPart];
-    }
-    if (cfTermsStr === "") {
-      throw new Error("Continued fraction must have at least one term after .~");
-    }
-    if (cfTermsStr.endsWith("~")) {
-      throw new Error("Continued fraction cannot end with ~");
-    }
-    if (cfTermsStr.includes("~~")) {
-      throw new Error("Invalid continued fraction format: double tilde");
-    }
-    const terms = cfTermsStr.split("~");
-    const cfTerms = [];
-    for (const term of terms) {
-      if (!/^\d+$/.test(term)) {
-        throw new Error(`Invalid continued fraction term: ${term}`);
-      }
-      const termValue = BigInt(term);
-      if (termValue <= 0n) {
-        throw new Error(`Continued fraction terms must be positive integers: ${term}`);
-      }
-      cfTerms.push(termValue);
-    }
-    return [intPart, ...cfTerms];
-  }
+  const result = sum();
+  if (position < tokens.length)
+    throw new SyntaxError(`R: unexpected '${peek().value ?? peek().text}'`);
+  return result;
 }
-// ../../packages/algebra/src/var.js
-class VariableManager {
-  constructor() {
-    this.variables = new Map;
-    this.functions = new Map;
-    this.modules = new Map;
-    this.inputBase = null;
-    this.customBases = new Map;
-    this.variablePattern = /^(?:@@[a-zA-Z0-9_]+@)?(?:@?([_a-z][a-zA-Z0-9_]*))$/;
-    this.functionPattern = /^(?:@@[a-zA-Z0-9_]+@)?(?:@?([A-Z][a-zA-Z0-9_]*))$/;
+
+// ../../packages/core/src/core-values.js
+var isInteger = (value) => value instanceof Integer;
+var isRational = (value) => value instanceof Rational;
+var isRationalInterval = (value) => value instanceof RationalInterval;
+var isRationalIntervalSet = (value) => value instanceof RationalIntervalSet;
+var isCertifiedApproximation = (value) => value instanceof CertifiedApproximation;
+var isFraction = (value) => value instanceof Fraction;
+var isFractionInterval = (value) => value instanceof FractionInterval;
+var isBaseSystem = (value) => value instanceof BaseSystem;
+var isCoreNumber = (value) => isInteger(value) || isRational(value) || isRationalInterval(value) || isCertifiedApproximation(value);
+function reviveCoreValue(_key, value) {
+  if (!value || typeof value !== "object" || typeof value.$ratmath !== "string") {
+    return value;
   }
-  setVariable(name, value) {
-    if (!this.variablePattern.test(name)) {
-      if (this.functionPattern.test(name)) {
-        throw new Error(`Invalid variable name '${name}'. Function names (starting with Uppercase) cannot be assigned values directly. Use '${name}(...) -> ...' to define a function.`);
+  switch (value.$ratmath) {
+    case "Integer":
+      return new Integer(value.value);
+    case "Rational":
+      return new Rational(value.numerator, value.denominator);
+    case "RationalInterval":
+      return new RationalInterval(value.start, value.end);
+    case "RationalIntervalSet":
+      if (value.version !== undefined && value.version !== 1) {
+        throw new Error(`Unsupported RationalIntervalSet JSON version: ${value.version}`);
       }
-      throw new Error(`Invalid variable name '${name}'. Variables must start with a lowercase letter, underscore, or @lowercase/@underscore.`);
-    }
-    const normalizedName = name.startsWith("@") ? name.substring(1) : name;
-    this.variables.set(normalizedName, value);
-  }
-  defineFunction(name, params, body, doc = "", defaults = {}) {
-    if (!this.functionPattern.test(name)) {
-      if (this.variablePattern.test(name)) {
-        throw new Error(`Invalid function name '${name}'. Function definitions must use names starting with an Uppercase letter or @Uppercase.`);
-      }
-      throw new Error(`Invalid function name '${name}'. Functions must start with an Uppercase letter or @Uppercase.`);
-    }
-    this.functions.set(name, { params, body, doc, type: "def", defaults });
-  }
-  registerJSFunction(name, handler, params, doc = "") {
-    if (!this.functionPattern.test(name)) {
-      throw new Error(`Invalid function name '${name}'. Functions must start with an Uppercase letter.`);
-    }
-    this.functions.set(name, { type: "js", handler, params, doc });
-  }
-  getHelp(name) {
-    if (name) {
-      const normalized = name.startsWith("@@") ? name : name.startsWith("@") ? name.substring(1) : name;
-      if (this.functions.has(normalized)) {
-        const f = this.functions.get(normalized);
-        const sig = `${normalized}(${f.params.join(", ")})`;
-        return `${sig}
-${f.doc || "No documentation available."}`;
-      }
-      return `Function '${name}' not found.`;
-    }
-    const entries = [];
-    for (const [fname, f] of this.functions) {
-      let snippet = f.doc ? f.doc.split(`
-`)[0] : "";
-      if (snippet.length > 50)
-        snippet = snippet.substring(0, 47) + "...";
-      entries.push(`${fname}(${f.params.join(",")}) - ${snippet}`);
-    }
-    return `Available Functions:
-${entries.join(`
-`)}`;
-  }
-  loadModule(moduleName, scope) {
-    const prefix = `@@${moduleName}@`;
-    if (scope.functions) {
-      for (const [name, def] of Object.entries(scope.functions)) {
-        const qualifiedName = `${prefix}${name}`;
-        this.functions.set(qualifiedName, { ...def });
-        this.functions.set(name, { ...def, isImported: true, module: moduleName });
-      }
-    }
-    if (scope.variables) {
-      for (const [name, val] of Object.entries(scope.variables)) {
-        const qualifiedName = `${prefix}${name}`;
-        this.variables.set(qualifiedName, val);
-        this.variables.set(name, val);
-      }
-    }
-    this.modules.set(moduleName, scope);
-    return `Module '${moduleName}' loaded.`;
-  }
-  unloadModule(moduleName) {
-    if (!this.modules.has(moduleName))
-      return `Module '${moduleName}' not loaded.`;
-    let count = 0;
-    for (const [name, def] of this.functions) {
-      if (def.isImported && def.module === moduleName) {
-        this.functions.delete(name);
-        count++;
-      }
-    }
-    this.modules.delete(moduleName);
-    return `Module '${moduleName}' unloaded (${count} functions removed).`;
-  }
-  setInputBase(baseSystem) {
-    this.inputBase = baseSystem;
-  }
-  preprocessExpression(expression) {
-    if (!this.inputBase || this.inputBase.base === 10) {
-      return expression;
-    }
-    let validChars = this.inputBase.characters.map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("");
-    if (this.inputBase.base > 10) {
-      const uppercaseChars = this.inputBase.characters.filter((c) => /[a-z]/.test(c)).map((c) => c.toUpperCase()).map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("");
-      validChars += uppercaseChars;
-    }
-    const numberPattern = new RegExp(`\\b(-?[${validChars}0-9a-zA-Z]+(?:\\.[${validChars}0-9a-zA-Z]*)?(?:\\.\\.[${validChars}0-9a-zA-Z]+(?:\\/[${validChars}0-9a-zA-Z]+)?)?(?:\\/[${validChars}0-9a-zA-Z]+)?(?:\\_\\^-?[${validChars}0-9a-zA-Z]+)?)(?:\\[([^\\]]+)\\](?:[Ee][+-]?[${validChars}0-9a-zA-Z]+|\\_\\^-?[${validChars}0-9a-zA-Z]+)?|\\b(?!\\s*\\[))`, "g");
-    return expression.replace(numberPattern, (match, baseValue, uncertainty) => {
-      if (uncertainty) {
-        return match;
-      }
-      try {
-        const normalize = (s) => this.inputBase.base <= 36 && this.inputBase.base > 10 ? s.toLowerCase() : s;
-        if (/^-?0[a-zA-Z]/.test(match)) {
-          return match;
-        }
-        const parseToRational = (str) => {
-          if (str.includes("..")) {
-            const [whole, fraction] = str.split("..");
-            const wholeDec = this.inputBase.toDecimal(normalize(whole));
-            if (fraction.includes("/")) {
-              const [num, den] = fraction.split("/");
-              const numDec = this.inputBase.toDecimal(normalize(num));
-              const denDec = this.inputBase.toDecimal(normalize(den));
-              const w = new Rational(wholeDec);
-              const n = new Rational(numDec);
-              const d = new Rational(denDec);
-              return w.add(n.divide(d));
-            } else {
-              const fracDec = this.inputBase.toDecimal(normalize(fraction));
-              return `${wholeDec}..${fracDec}`;
-            }
-          }
-          if (str.includes("/") && !str.includes(".")) {
-            const [num, den] = str.split("/");
-            const numDec = this.inputBase.toDecimal(normalize(num));
-            const denDec = this.inputBase.toDecimal(normalize(den));
-            return `${numDec}/${denDec}`;
-          }
-          if (str.includes(".")) {
-            const [intStr, fracStr] = str.split(".");
-            const isNegative2 = intStr.startsWith("-");
-            let val2 = new Rational(this.inputBase.toDecimal(normalize(intStr)));
-            const base = BigInt(this.inputBase.base);
-            let divisor = base;
-            for (const char of fracStr) {
-              const digitValue = this.inputBase.toDecimal(normalize(char));
-              const term = new Rational(digitValue, divisor);
-              val2 = isNegative2 ? val2.subtract(term) : val2.add(term);
-              divisor *= base;
-            }
-            return val2.toString();
-          }
-          let targetStr = str;
-          let isNeg = false;
-          if (targetStr.startsWith("-")) {
-            isNeg = true;
-            targetStr = targetStr.substring(1);
-          }
-          const val = this.inputBase.toDecimal(normalize(targetStr));
-          return isNeg ? (-val).toString() : val.toString();
-        };
-        const toPrefixed0d = (s) => s.startsWith("-") ? `-0d${s.substring(1)}` : `0d${s}`;
-        if (match.includes("_^")) {
-          const [basePart, expPart] = match.split("_^");
-          const baseValStr = parseToRational(basePart);
-          const expValStr = parseToRational(expPart);
-          return `(${toPrefixed0d(baseValStr)}) * (${toPrefixed0d(this.inputBase.base.toString())}) ^ (${toPrefixed0d(expValStr)})`;
-        }
-        const valStr = parseToRational(match);
-        return toPrefixed0d(valStr);
-      } catch (error) {
-        return match;
-      }
-    });
-  }
-  processInput(input) {
-    try {
-      const trimmed = input.trim();
-      const funcDefMatch = trimmed.match(/^(@?[_a-zA-Z][a-zA-Z0-9_]*)\s*\(([^)]*)\)\s*->\s*(.+)$/);
-      if (funcDefMatch) {
-        const [, funcName, paramStr, body] = funcDefMatch;
-        const rawParams = paramStr.split(",").map((p) => p.trim()).filter((p) => p);
-        const params = [];
-        const defaults = {};
-        for (const p of rawParams) {
-          if (p.includes("?")) {
-            const [pName, pDef] = p.split("?").map((s) => s.trim());
-            if (!pName)
-              throw new Error("Invalid parameter syntax: " + p);
-            params.push(pName + "?");
-            if (pDef)
-              defaults[pName] = pDef;
-          } else {
-            params.push(p);
-          }
-        }
-        return this.handleFunctionDefinition(funcName, params, body, undefined, defaults);
-      }
-      const arrowAssignMatch = trimmed.match(/^(@?[_a-zA-Z][a-zA-Z0-9_]*)\s*=\s*(?:(?:\(([^)]*)\))|([_a-zA-Z][a-zA-Z0-9_]*))\s*->\s*(.+)$/);
-      if (arrowAssignMatch) {
-        const [, name, paramsInParens, singleParam, body] = arrowAssignMatch;
-        const rawParams = (paramsInParens !== undefined ? paramsInParens : singleParam).split(",").map((p) => p.trim()).filter((p) => p);
-        const params = [];
-        const defaults = {};
-        for (const p of rawParams) {
-          if (p.includes("?")) {
-            const [pName, pDef] = p.split("?").map((s) => s.trim());
-            if (!pName)
-              throw new Error("Invalid parameter syntax: " + p);
-            params.push(pName + "?");
-            if (pDef)
-              defaults[pName] = pDef;
-          } else {
-            params.push(p);
-          }
-        }
-        return this.handleFunctionDefinition(name, params, body, undefined, defaults);
-      }
-      const assignmentMatch = trimmed.match(/^(@?[_a-zA-Z][a-zA-Z0-9_]*)\s*=\s*(.+)$/);
-      if (assignmentMatch) {
-        const [, varName, expression] = assignmentMatch;
-        return this.handleAssignment(varName, expression);
-      }
-      if (/^(SUM|PROD|SEQ)/.test(trimmed)) {}
-      const funcLookupMatch = trimmed.match(/^(@?[A-Z][a-zA-Z0-9]*)$/);
-      if (funcLookupMatch) {
-        const name = funcLookupMatch[1];
-        const normalizedName = name.startsWith("@") ? name.substring(1) : name;
-        if (this.functions.has(normalizedName)) {
-          let isDigit = false;
-          if (this.inputBase) {
-            const validChars = this.inputBase.base > 10 ? this.inputBase.characters.concat(this.inputBase.characters.filter((c) => /[a-z]/.test(c)).map((c) => c.toUpperCase())) : this.inputBase.characters;
-            if (!name.startsWith("@")) {
-              isDigit = [...name].every((c) => validChars.includes(c));
-            }
-          }
-          if (isDigit) {
-            throw new Error(`Ambiguous reference '${name}'. Use @${name} for function or explicit base prefix (e.g. 0D${name} or 0x${name}) for number.`);
-          }
-          const f = this.functions.get(normalizedName);
-          return {
-            type: "function_display",
-            result: `${normalizedName}(${f.params.join(", ")}) -> ${f.body}`,
-            message: `${normalizedName}(${f.params.join(", ")}) -> ${f.body}`
-          };
-        }
-      }
-      return this.evaluateExpression(trimmed);
-    } catch (error) {
-      return {
-        type: "error",
-        message: error.message
-      };
-    }
-  }
-  handleAssignment(varName, expression) {
-    const isUpperCase = /^[A-Z][a-zA-Z0-9]*$/.test(varName) || varName.startsWith("@") && /^[A-Z]/.test(varName.substring(1));
-    if (isUpperCase) {
-      const aliasMatch = expression.trim().match(/^(@?[A-Z][a-zA-Z0-9]*)$/);
-      if (aliasMatch) {
-        const sourceName = aliasMatch[1];
-        const normSource = sourceName.startsWith("@") ? sourceName.substring(1) : sourceName;
-        const normTarget = varName.startsWith("@") ? varName.substring(1) : varName;
-        if (this.functions.has(normSource)) {
-          const sourceDef = this.functions.get(normSource);
-          this.functions.set(normTarget, { ...sourceDef });
-          return {
-            type: "function",
-            result: null,
-            message: `Function ${normTarget} defined as alias of ${normSource}`
-          };
-        }
-      }
-      return {
-        type: "error",
-        message: `Function names (starting with Uppercase) cannot be assigned values directly. To define a function, use '->' syntax or alias an existing function.`
-      };
-    }
-    try {
-      const result = this.evaluateExpression(expression);
-      if (result.type === "error") {
-        return result;
-      }
-      let valueToStore = result.result;
-      let displayValue = result.result;
-      if (result.result && result.result.type === "sequence") {
-        valueToStore = result.result.lastValue;
-        displayValue = result.result;
-      }
-      this.variables.set(varName, valueToStore);
-      let message;
-      if (result.result && result.result.type === "sequence") {
-        message = `${varName} = ${this.formatValue(valueToStore)} (assigned last value of ${this.formatValue(displayValue)})`;
-      } else {
-        message = `${varName} = ${this.formatValue(displayValue)}`;
-      }
-      return {
-        type: "assignment",
-        result: displayValue,
-        message
-      };
-    } catch (error) {
-      return {
-        type: "error",
-        message: `Assignment error: ${error.message}`
-      };
-    }
-  }
-  handleFunctionDefinition(funcName, params, body, doc, defaults = {}) {
-    if (params.length === 0) {}
-    if (new Set(params).size !== params.length) {
-      return { type: "error", message: "Duplicate parameter names" };
-    }
-    const paramSet = new Set;
-    for (const param of params) {
-      const clean = param.replace(/\?$/, "");
-      if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(clean)) {
-        return {
-          type: "error",
-          message: `Invalid parameter name '${param}'. Must start with letter.`
-        };
-      }
-      paramSet.add(clean);
-      try {
-        const res = this.evaluateExpression(clean, new Map);
-        if (res.type !== "error" && res.result !== undefined) {
-          return {
-            type: "error",
-            message: `Ambiguous parameter '${clean}'. It is a valid number in the current base (${this.inputBase}).`
-          };
-        }
-      } catch (e) {}
-    }
-    const staticBody = this.freezeExpression(body, paramSet);
-    const staticDefaults = {};
-    for (const [key, val] of Object.entries(defaults)) {
-      staticDefaults[key] = this.freezeExpression(val, paramSet);
-    }
-    this.functions.set(funcName, { params, body: staticBody, type: "def", doc: doc || `User defined function: ${body}`, defaults: staticDefaults });
-    return {
-      type: "function",
-      result: null,
-      message: `Function ${funcName}[${params.join(",")}] defined`
-    };
-  }
-  handleFunctionCall(funcName, argsStr) {
-    if (!this.functions.has(funcName)) {
-      return {
-        type: "error",
-        message: `Function ${funcName} not defined`
-      };
-    }
-    const func = this.functions.get(funcName);
-    if (func.type === "js") {}
-    const args = [];
-    let currentArg = "";
-    let depth = 0;
-    for (let i = 0;i < argsStr.length; i++) {
-      const char = argsStr[i];
-      if (char === "(" || char === "[" || char === "{")
-        depth++;
-      else if (char === ")" || char === "]" || char === "}")
-        depth--;
-      if (char === "," && depth === 0) {
-        const trimmed = currentArg.trim();
-        args.push(trimmed === "" ? undefined : trimmed);
-        currentArg = "";
-      } else {
-        currentArg += char;
-      }
-    }
-    const lastTrimmed = currentArg.trim();
-    if (lastTrimmed !== "") {
-      args.push(lastTrimmed);
-    }
-    const minArgs = func.params.filter((p) => !p.endsWith("?")).length;
-    const maxArgs = func.params.length;
-    if (args.length > maxArgs) {
-      return {
-        type: "error",
-        message: `Function ${funcName} expects at most ${maxArgs} arguments, got ${args.length}`
-      };
-    }
-    try {
-      const argValues = [];
-      for (let i = 0;i < maxArgs; i++) {
-        let argRaw = args[i];
-        const paramName = func.params[i];
-        const cleanParamName = paramName.replace(/\?$/, "");
-        if (argRaw === undefined) {
-          if (func.defaults && func.defaults[cleanParamName] !== undefined) {
-            argRaw = func.defaults[cleanParamName];
-          } else if (paramName.endsWith("?")) {
-            argRaw = undefined;
-          } else {
-            throw new Error(`Missing required argument '${cleanParamName}'`);
-          }
-        }
-        if (argRaw === undefined) {
-          argValues.push(undefined);
-          continue;
-        }
-        const isParamFunction = /^[A-Z]/.test(cleanParamName);
-        const isParamValue = /^[a-z]/.test(cleanParamName);
-        const lambdaMatch = argRaw.match(/^([a-zA-Z][a-zA-Z0-9_]*)\s*->\s*(.+)$/);
-        if (lambdaMatch) {
-          if (!isParamFunction) {
-            throw new Error(`Argument mismatch for '${cleanParamName}': Expected value (compatible with lowercase), got Lambda function.`);
-          }
-          const [, lambdaParam, lambdaBody] = lambdaMatch;
-          const anonName = `@@Anon@${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-          this.functions.set(anonName, {
-            params: [lambdaParam.trim()],
-            body: lambdaBody.trim(),
-            type: "def",
-            doc: "Anonymous Lambda"
-          });
-          argValues.push(anonName);
-          continue;
-        }
-        if (isParamFunction) {
-          const trimmed = argRaw.trim();
-          if (/^(?:@@[a-zA-Z0-9_]+@)?@?[a-zA-Z0-9_]+$/.test(trimmed)) {
-            const norm = trimmed.startsWith("@@") ? trimmed : trimmed.startsWith("@") ? trimmed.substring(1) : trimmed;
-            if (this.functions.has(norm)) {
-              argValues.push(norm);
-              continue;
-            } else {
-              throw new Error(`Argument mismatch for '${cleanParamName}': Expected existing function, got unknown '${trimmed}'`);
-            }
-          } else {
-            throw new Error(`Argument mismatch for '${cleanParamName}': Expected function name or lambda, got expression.`);
-          }
-        }
-        const result2 = this.evaluateExpression(argRaw);
-        if (result2.type === "error") {
-          return result2;
-        }
-        argValues.push(result2.result);
-      }
-      if (func.type === "js") {
-        try {
-          const res = func.handler.call(this, ...argValues);
-          return { type: "expression", result: res };
-        } catch (e) {
-          return { type: "error", message: `JS Function ${funcName} error: ${e.message}` };
-        }
-      }
-      const oldValues = new Map;
-      const callBindScope = new Map;
-      for (let i = 0;i < func.params.length; i++) {
-        const param = func.params[i];
-        const cleanParam = param.replace(/\?$/, "");
-        callBindScope.set(cleanParam, argValues[i]);
-      }
-      const result = this.evaluateExpression(func.body, callBindScope);
-      return result;
-    } catch (error) {
-      return {
-        type: "error",
-        message: `Function call error: ${error.message}`
-      };
-    }
-  }
-  handleSpecialFunction(keyword, variable, expression, startStr, endStr, incrementStr) {
-    try {
-      const startResult = this.evaluateExpression(startStr);
-      if (startResult.type === "error")
-        return startResult;
-      const endResult = this.evaluateExpression(endStr);
-      if (endResult.type === "error")
-        return endResult;
-      const incrementResult = this.evaluateExpression(incrementStr);
-      if (incrementResult.type === "error")
-        return incrementResult;
-      const start = this.toInteger(startResult.result);
-      const end = this.toInteger(endResult.result);
-      const increment = this.toInteger(incrementResult.result);
-      if (increment <= 0) {
-        return {
-          type: "error",
-          message: "Increment must be positive integer"
-        };
-      }
-      if (end < start) {
-        return {
-          type: "error",
-          message: "The end cannot be less than start"
-        };
-      }
-      const oldValue = this.variables.get(variable);
-      let result;
-      let iterationCount = 0;
-      let interrupted = false;
-      let progressCallback = this.progressCallback;
-      const values = keyword === "SEQ" ? [] : null;
-      let accumulator = null;
-      if (keyword === "SUM") {
-        accumulator = new Integer(0);
-      } else if (keyword === "PROD") {
-        accumulator = new Integer(1);
-      }
-      for (let i = start;i <= end; i += increment) {
-        iterationCount++;
-        if (progressCallback) {
-          const shouldContinue = progressCallback(keyword, variable, i, end, accumulator, iterationCount);
-          if (!shouldContinue) {
-            interrupted = true;
-            break;
-          }
-        }
-        this.variables.set(variable, new Integer(i));
-        const exprResult = this.evaluateExpression(expression);
-        if (exprResult.type === "error") {
-          this.restoreVariable(variable, oldValue);
-          return exprResult;
-        }
-        if (keyword === "SUM") {
-          accumulator = accumulator.add(exprResult.result);
-        } else if (keyword === "PROD") {
-          accumulator = accumulator.multiply(exprResult.result);
-        } else if (keyword === "SEQ") {
-          values.push(exprResult.result);
-        }
-      }
-      this.restoreVariable(variable, oldValue);
-      if (interrupted) {
-        return {
-          type: "error",
-          message: `${keyword} computation interrupted at ${variable}=${start + (iterationCount - 1) * increment} (${iterationCount} iterations completed, current value: ${this.formatValue(accumulator || values && values[values.length - 1])})`
-        };
-      }
-      if (iterationCount === 0) {
-        result = keyword === "PROD" ? new Integer(1) : new Integer(0);
-      } else if (keyword === "SUM" || keyword === "PROD") {
-        result = accumulator;
-      } else if (keyword === "SEQ") {
-        result = {
-          type: "sequence",
-          values,
-          lastValue: values[values.length - 1]
-        };
-      }
-      return {
-        type: "expression",
-        result
-      };
-    } catch (error) {
-      return {
-        type: "error",
-        message: `${keyword} error: ${error.message}`
-      };
-    }
-  }
-  evaluateExpression(expression, localScope = new Map) {
-    try {
-      const baseCommandMatch = expression.match(/^([A-Z0-9]+)\s+(.+)$/);
-      if (baseCommandMatch) {
-        const command = baseCommandMatch[1];
-        const rest = baseCommandMatch[2];
-        let tempBase = null;
-        const upperCommand = command.toUpperCase();
-        if (upperCommand === "HEX" || upperCommand === "0X")
-          tempBase = BaseSystem.HEXADECIMAL;
-        else if (upperCommand === "BIN" || upperCommand === "0B")
-          tempBase = BaseSystem.BINARY;
-        else if (upperCommand === "OCT" || upperCommand === "0O")
-          tempBase = BaseSystem.OCTAL;
-        else if (upperCommand === "DEC" || command === "0d")
-          tempBase = BaseSystem.DECIMAL;
-        else if (command.startsWith("BASE")) {
-          const match2 = command.match(/^BASE(\d+)$/);
-          if (match2) {
-            const baseNum = parseInt(match2[1]);
-            if (baseNum >= 2 && baseNum <= 62) {
-              try {
-                tempBase = BaseSystem.fromBase(baseNum);
-              } catch (e) {}
-            }
-          }
-        }
-        if (tempBase) {
-          const originalBase = this.inputBase;
-          try {
-            this.setInputBase(tempBase);
-            return this.evaluateExpression(rest, localScope);
-          } finally {
-            this.setInputBase(originalBase);
-          }
-        }
-      }
-      let substitutedFunctions = expression;
-      const functionCallRegex = /(?:^|[^a-zA-Z0-9_@])((?:@@[a-zA-Z0-9_]+@)?(?:@?[_a-zA-Z][a-zA-Z0-9_]*))\s*\(/g;
-      let match;
-      while ((match = functionCallRegex.exec(substitutedFunctions)) !== null) {
-        const fullMatch = match[0];
-        const funcName = match[1];
-        const prefixLen = fullMatch.indexOf(funcName);
-        const startIndex = match.index + prefixLen;
-        const openParenIndex = startIndex + funcName.length;
-        let depth = 1;
-        let closeParenIndex = -1;
-        for (let i = openParenIndex + 1;i < substitutedFunctions.length; i++) {
-          if (substitutedFunctions[i] === "(")
-            depth++;
-          else if (substitutedFunctions[i] === ")")
-            depth--;
-          if (depth === 0) {
-            closeParenIndex = i;
-            break;
-          }
-        }
-        if (closeParenIndex !== -1) {
-          const argsStr = substitutedFunctions.substring(openParenIndex + 1, closeParenIndex);
-          const normalizedFuncName = funcName.startsWith("@@") ? funcName : funcName.startsWith("@") ? funcName.substring(1) : funcName;
-          let funcDef = this.functions.get(normalizedFuncName);
-          if (!funcDef && localScope.has(normalizedFuncName)) {
-            const possibleAlias = localScope.get(normalizedFuncName);
-            if (typeof possibleAlias === "string") {
-              const aliasNorm = possibleAlias.startsWith("@@") ? possibleAlias : possibleAlias.startsWith("@") ? possibleAlias.substring(1) : possibleAlias;
-              if (this.functions.has(aliasNorm)) {
-                funcDef = this.functions.get(aliasNorm);
-              }
-            }
-          }
-          if (funcDef) {
-            const args = [];
-            let currentArg = "";
-            let argDepth = 0;
-            for (let i = 0;i < argsStr.length; i++) {
-              const char = argsStr[i];
-              if (char === "(" || char === "[" || char === "{")
-                argDepth++;
-              else if (char === ")" || char === "]" || char === "}")
-                argDepth--;
-              if (char === "," && argDepth === 0) {
-                args.push(currentArg.trim());
-                currentArg = "";
-              } else {
-                currentArg += char;
-              }
-            }
-            if (currentArg.trim() !== "")
-              args.push(currentArg.trim());
-            let minArgs = 0;
-            const maxArgs = funcDef.params.length;
-            for (const p of funcDef.params) {
-              if (!p.endsWith("?") && (!funcDef.defaults || funcDef.defaults[p] === undefined)) {
-                minArgs++;
-              }
-            }
-            if (args.length < minArgs || args.length > maxArgs) {
-              throw new Error(`Function '${funcName}' expects ${minArgs}-${maxArgs} arguments, got ${args.length}`);
-            }
-            const callBindScope = new Map;
-            for (let i = 0;i < funcDef.params.length; i++) {
-              const rawParamName = funcDef.params[i];
-              const isOptional = rawParamName.endsWith("?");
-              const paramName = isOptional ? rawParamName.slice(0, -1) : rawParamName;
-              let argRaw = args[i];
-              if (argRaw === undefined || argRaw === "") {
-                if (funcDef.defaults && funcDef.defaults[paramName] !== undefined) {
-                  argRaw = funcDef.defaults[paramName];
-                } else if (isOptional) {
-                  continue;
-                } else {
-                  throw new Error(`Missing required argument '${paramName}'`);
-                }
-              }
-              const isParamFunction = /^[A-Z]/.test(paramName);
-              const lambdaMatch = argRaw.match(/^([a-zA-Z][a-zA-Z0-9_]*)\s*->\s*(.+)$/);
-              if (lambdaMatch) {
-                if (!isParamFunction) {
-                  throw new Error(`Argument mismatch for '${paramName}': Expected value, got Lambda function.`);
-                }
-                const [, lambdaParam, lambdaBody] = lambdaMatch;
-                const anonName = `@@Anon@${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-                this.functions.set(anonName, {
-                  params: [lambdaParam.trim()],
-                  body: lambdaBody.trim(),
-                  type: "def",
-                  doc: "Anonymous Lambda"
-                });
-                callBindScope.set(paramName, anonName);
-                continue;
-              }
-              if (isParamFunction) {
-                const trimmed = argRaw.trim();
-                if (/^(?:@@[a-zA-Z0-9_]+@)?@?[a-zA-Z0-9_]+$/.test(trimmed)) {
-                  const norm = trimmed.startsWith("@@") ? trimmed : trimmed.startsWith("@") ? trimmed.substring(1) : trimmed;
-                  if (this.functions.has(norm)) {
-                    callBindScope.set(paramName, norm);
-                    continue;
-                  } else {
-                    throw new Error(`Argument mismatch for '${paramName}': Expected existing function, got unknown '${trimmed}'`);
-                  }
-                } else {
-                  throw new Error(`Argument mismatch for '${paramName}': Expected function name or lambda, got expression.`);
-                }
-              }
-              const argResult = this.evaluateExpression(argRaw, localScope);
-              if (argResult.type === "error")
-                throw new Error(argResult.message);
-              callBindScope.set(paramName, argResult.result);
-            }
-            const bodyResult = this.evaluateExpression(funcDef.body, callBindScope);
-            if (bodyResult.type === "error")
-              throw new Error(bodyResult.message);
-            const resultStr = this.formatValueWithPrefix(bodyResult.result);
-            substitutedFunctions = substitutedFunctions.substring(0, startIndex) + resultStr + substitutedFunctions.substring(closeParenIndex + 1);
-            functionCallRegex.lastIndex = 0;
-            continue;
-          }
-        }
-      }
-      let substituted = substitutedFunctions;
-      const allVars = new Map([...this.variables, ...localScope]);
-      substituted = substituted.replace(/(^|[^a-zA-Z0-9_@])((?:@@[a-zA-Z0-9_]+@)?)(@?)([_a-zA-Z][a-zA-Z0-9_]*)/g, (match2, prefixChar, namespaceInfo, atSign, name) => {
-        const fullIdentifier = `${namespaceInfo}${name}`;
-        const isVar = allVars.has(fullIdentifier);
-        const isFunc = this.functions.has(fullIdentifier);
-        const hasPrefix = atSign === "@";
-        if (!isVar && !isFunc) {
-          return match2;
-        }
-        let valStr;
-        if (isVar) {
-          const value = allVars.get(fullIdentifier);
-          valStr = this.formatValueWithPrefix(value);
-        } else if (isFunc) {
-          let isDigit2 = false;
-          if (this.inputBase) {
-            const validChars = this.inputBase.base > 10 ? this.inputBase.characters.concat(this.inputBase.characters.filter((c) => /[a-z]/.test(c)).map((c) => c.toUpperCase())) : this.inputBase.characters;
-            if (!namespaceInfo) {
-              isDigit2 = [...name].every((c) => validChars.includes(c));
-            }
-          }
-          if (isDigit2 && !hasPrefix) {
-            throw new Error(`Ambiguous reference '${name}'. Use @${name} for function or explicit base prefix (e.g. 0D${name} or 0x${name}) for number.`);
-          }
-          valStr = fullIdentifier;
-        }
-        let isDigit = false;
-        if (this.inputBase) {
-          const validChars = this.inputBase.base > 10 ? this.inputBase.characters.concat(this.inputBase.characters.filter((c) => /[a-z]/.test(c)).map((c) => c.toUpperCase())) : this.inputBase.characters;
-          if (!namespaceInfo) {
-            isDigit = [...name].every((c) => validChars.includes(c));
-          }
-        }
-        if (hasPrefix) {
-          if (isFunc)
-            return `${prefixChar}${valStr}`;
-          return `${prefixChar}(${valStr})`;
-        } else {
-          if (isDigit) {
-            const type = isVar ? "variable" : "function";
-            throw new Error(`Ambiguous reference '${name}'. Use @${name} for ${type} or explicit base prefix (e.g. 0D${name} or 0x${name}) for number.`);
-          } else {
-            if (isFunc)
-              return `${prefixChar}${valStr}`;
-            return `${prefixChar}(${valStr})`;
-          }
-        }
+      return new RationalIntervalSet(value.components);
+    case "CertifiedApproximation":
+      return new CertifiedApproximation(value.candidate, value.enclosure, {
+        representation: value.representation,
+        sourceId: value.sourceId ?? undefined,
+        dependencies: value.dependencies ?? []
       });
-      const preprocessed = this.preprocessExpression(substituted);
-      const specialMatch = preprocessed.match(/^(SUM|PROD|SEQ)\[([a-zA-Z])\]\(([^,]+),\s*([^,]+),\s*([^,]+)(?:,\s*([^)]+))?\)$/);
-      if (specialMatch) {
-        const [, keyword, variable, expr, start, end, increment] = specialMatch;
-        return this.handleSpecialFunction(keyword, variable, expr, start, end, increment || "1");
-      }
-      let result;
-      try {
-        result = Parser.parse(preprocessed, {
-          typeAware: true,
-          customBases: this.customBases,
-          inputBase: this.inputBase
-        });
-      } catch (parseError) {
-        const trimmed = preprocessed.trim();
-        const tokens = trimmed.split(/[^a-zA-Z0-9@_]/).filter((t) => t.length > 0);
-        for (const token of tokens) {
-          const rawName = token.startsWith("@@") ? token : token.startsWith("@") ? token.substring(1) : token;
-          if (this.functions.has(rawName)) {
-            if (tokens.length > 1 || trimmed.includes("(") || trimmed.includes(")")) {
-              throw new Error(`Function '${rawName}' cannot be used as a value in this context`);
-            }
-            return { type: "expression", result: rawName };
-          }
-        }
-        throw parseError;
-      }
-      return { type: "expression", result };
-    } catch (error) {
-      return { type: "error", message: error.message };
-    }
-  }
-  formatValueWithPrefix(value) {
-    if (!value)
-      return "0";
-    if (value.type === "sequence") {
-      const formatted = value.values.map((v) => this.formatValueWithPrefix(v));
-      return `[${formatted.join(", ")}]`;
-    }
-    if (value instanceof RationalInterval) {
-      return `${this.formatValueWithPrefix(value.low)}:${this.formatValueWithPrefix(value.high)}`;
-    }
-    let str;
-    if (value instanceof Rational) {
-      str = value.toString();
-    } else if (value instanceof Integer) {
-      str = value.value.toString();
-    } else {
-      str = value.toString();
-    }
-    if (/^-?[\d./]+$/.test(str) && !str.includes("0d")) {
-      return str.replace(/^(-)?/, "$10d");
-    }
-    return str;
-  }
-  formatValue(value) {
-    if (value && value.type === "sequence") {
-      const formattedValues = value.values.map((v) => this.formatValue(v));
-      if (formattedValues.length <= 10) {
-        return `[${formattedValues.join(", ")}]`;
-      } else {
-        const start = formattedValues.slice(0, 3);
-        const end = formattedValues.slice(-3);
-        return `[${start.join(", ")}, ..., ${end.join(", ")}] (${formattedValues.length} values)`;
-      }
-    } else if (value instanceof RationalInterval) {
-      return `${value.low.toString()}:${value.high.toString()}`;
-    } else if (value instanceof Rational) {
-      return value.toString();
-    } else if (value instanceof Integer) {
-      return value.value.toString();
-    } else {
-      return value.toString();
-    }
-  }
-  toInteger(value) {
-    if (value instanceof Integer) {
-      return Number(value.value);
-    } else if (value instanceof Rational) {
-      if (value.denominator !== 1n) {
-        throw new Error("Iterator bounds must be integers");
-      }
-      return Number(value.numerator);
-    } else {
-      throw new Error("Iterator bounds must be integers");
-    }
-  }
-  restoreVariable(variable, oldValue) {
-    if (oldValue !== undefined) {
-      this.variables.set(variable, oldValue);
-    } else {
-      this.variables.delete(variable);
-    }
-  }
-  getVariables() {
-    return new Map(this.variables);
-  }
-  getFunctions() {
-    return new Map(this.functions);
-  }
-  clear() {
-    this.variables.clear();
-    this.functions.clear();
-  }
-  setProgressCallback(callback) {
-    this.progressCallback = callback;
-  }
-  setCustomBases(customBases) {
-    this.customBases = customBases;
-  }
-  freezeExpression(expression, paramSet) {
-    let staticExpr = expression;
-    const varRegex = /(?:^|[^a-zA-Z0-9_@])((?:@@[a-zA-Z0-9_]+@)?(?:@?[_a-zA-Z][a-zA-Z0-9_]*))/g;
-    staticExpr = staticExpr.replace(varRegex, (fullMatch, identifier, offset, string) => {
-      const prefix = fullMatch.substring(0, fullMatch.indexOf(identifier));
-      const norm = identifier.replace(/^@/, "");
-      if (paramSet.has(norm)) {
-        return prefix + "@" + norm;
-      }
-      if (norm.startsWith("_"))
-        return fullMatch;
-      if (this.functions.has(norm)) {
-        if (norm.startsWith("_"))
-          return fullMatch;
-        const originalFunc = this.functions.get(norm);
-        if (originalFunc.type === "js")
-          return fullMatch;
-        const timestamp = Date.now().toString(36);
-        const random = Math.random().toString(36).substring(2, 6);
-        const snapshotName = `@@Static@${norm}_${timestamp}${random}`;
-        const snapshotFunc = { ...originalFunc, type: "def", doc: `[Snapshot] ${originalFunc.doc}` };
-        this.functions.set(snapshotName, snapshotFunc);
-        return prefix + snapshotName;
-      }
-      if (this.variables.has(norm)) {
-        const val = this.variables.get(norm);
-        return prefix + this.formatValueWithPrefix(val);
-      }
-      if (!norm.startsWith("_")) {
-        throw new Error(`Undefined variable or function '${norm}' at definition time. Use '_${norm}' for dynamic resolution or define it first.`);
-      }
-      return fullMatch;
-    });
-    const numRegex = /(?:^|[^a-zA-Z0-9_@])(\d+[a-zA-Z0-9.]*|0[dxob][a-zA-Z0-9.]+)/g;
-    staticExpr = staticExpr.replace(numRegex, (fullMatch, numStr, offset, string) => {
-      const prefix = fullMatch.substring(0, fullMatch.indexOf(numStr));
-      try {
-        const evalRes = this.evaluateExpression(numStr, new Map);
-        if (evalRes.type !== "error" && evalRes.result !== undefined) {
-          const val = evalRes.result;
-          const safeStr = this.formatValueWithPrefix(val);
-          const charAfter = string[offset + fullMatch.length];
-          let insertion = safeStr;
-          if (/[a-zA-Z0-9]/.test(charAfter)) {
-            insertion += " ";
-          }
-          return prefix + insertion;
-        }
-      } catch (e) {}
-      return fullMatch;
-    });
-    return staticExpr;
+    case "Fraction":
+      return new Fraction(value.numerator, value.denominator, {
+        allowInfinite: value.denominator === "0"
+      });
+    case "FractionInterval":
+      return new FractionInterval(value.low, value.high);
+    case "BaseSystem":
+      return new BaseSystem(value.characters, value.name, {
+        radix: value.radix,
+        digitOffset: value.digitOffset,
+        allowReserved: value.allowReserved
+      });
+    default:
+      return value;
   }
 }
+
+// ../../packages/core/index.js
+var core_default = {
+  Rational,
+  RationalInterval,
+  RationalIntervalSet,
+  RANGE_ARITHMETIC_CHECKER_ID,
+  RANGE_OPERATION_RESULT_SCHEMA,
+  asRationalIntervalSet,
+  checkRangeOperationResult,
+  rangeAbsoluteValue,
+  rangeAdd,
+  rangeDivide,
+  rangeIntegerPower,
+  rangeMultiply,
+  rangeNegate,
+  rangeReciprocal,
+  rangeSubtract,
+  Fraction,
+  FractionInterval,
+  Integer,
+  TypePromotion,
+  BaseSystem,
+  NumeralSystem,
+  NUMERAL_SYSTEM_SCHEMA,
+  NUMERAL_LIMITS,
+  CertifiedApproximation,
+  Relation,
+  boundedContinuedFractionApproximation,
+  boundedDecimalApproximation,
+  certifiedContinuedFractionPrefix,
+  certifiedRadixPrefix,
+  normalizeCertifiedApproximation,
+  possibleRelations,
+  parseContinuedFraction,
+  parseCertifiedApproximation: parseApproximation,
+  parseDecimal,
+  parseInterval,
+  parseMixedNumber,
+  parseNumber,
+  parseRational,
+  parseRepeatingDecimal,
+  R,
+  isBaseSystem,
+  isCertifiedApproximation,
+  isCoreNumber,
+  isFraction,
+  isFractionInterval,
+  isInteger,
+  isRational,
+  isRationalInterval,
+  isRationalIntervalSet,
+  reviveCoreValue
+};
+
+// ../calc/src/session.js
+var { Integer: Integer2, Rational: Rational2, RationalInterval: RationalInterval2 } = exports_core;
+var BLOCKED = new Set([
+  "fetch",
+  "XMLHttpRequest",
+  "WebSocket",
+  "EventSource",
+  "Worker",
+  "SharedWorker",
+  "importScripts",
+  "require",
+  "process",
+  "Bun",
+  "Deno",
+  "navigator",
+  "localStorage",
+  "sessionStorage",
+  "indexedDB",
+  "document",
+  "window",
+  "self",
+  "top",
+  "parent",
+  "globalThis",
+  "global",
+  "opener",
+  "frames"
+]);
+var DISPLAY_MODES = ["both", "exact", "decimal", "mixed", "cf"];
+function rewriteDeclarations(source) {
+  let out = "";
+  let depth = 0;
+  let statementStart = true;
+  for (let i = 0;i < source.length; ) {
+    const ch = source[i];
+    const two = source.slice(i, i + 2);
+    if (two === "//") {
+      const end = source.indexOf(`
+`, i);
+      const stop = end === -1 ? source.length : end;
+      out += source.slice(i, stop);
+      i = stop;
+      continue;
+    }
+    if (two === "/*") {
+      const end = source.indexOf("*/", i + 2);
+      const stop = end === -1 ? source.length : end + 2;
+      out += source.slice(i, stop);
+      i = stop;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      const stop = skipString(source, i);
+      out += source.slice(i, stop);
+      i = stop;
+      statementStart = false;
+      continue;
+    }
+    if (depth === 0 && statementStart) {
+      const rest = source.slice(i);
+      const declaration = rest.match(/^(let|const|var)\s+(?=[[{A-Za-z_$])/);
+      if (declaration) {
+        const after = rest.slice(declaration[0].length);
+        if (after.startsWith("{")) {
+          const end = findStatementEnd(source, i + declaration[0].length);
+          out += `(${source.slice(i + declaration[0].length, end)})`;
+          i = end;
+          statementStart = false;
+          continue;
+        }
+        i += declaration[0].length;
+        statementStart = false;
+        continue;
+      }
+      const named = rest.match(/^(async\s+function\*?|function\*?|class)\s+([A-Za-z_$][\w$]*)/);
+      if (named) {
+        const end = findBlockEnd(source, i);
+        out += `${named[2]} = ${source.slice(i, end)};`;
+        i = end;
+        statementStart = true;
+        continue;
+      }
+    }
+    if (ch === "{" || ch === "(" || ch === "[")
+      depth += 1;
+    if (ch === "}" || ch === ")" || ch === "]")
+      depth = Math.max(0, depth - 1);
+    if (!/\s/.test(ch))
+      statementStart = depth === 0 && (ch === ";" || ch === "}") ? true : false;
+    if (ch === `
+` && depth === 0)
+      statementStart = true;
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+function skipString(source, start) {
+  const quote = source[start];
+  let i = start + 1;
+  let depth = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === "\\") {
+      i += 2;
+      continue;
+    }
+    if (quote === "`" && ch === "$" && source[i + 1] === "{") {
+      depth += 1;
+      i += 2;
+      continue;
+    }
+    if (quote === "`" && depth > 0) {
+      if (ch === "}")
+        depth -= 1;
+      else if (ch === "`" || ch === '"' || ch === "'") {
+        i = skipString(source, i);
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+    if (ch === quote)
+      return i + 1;
+    i += 1;
+  }
+  return i;
+}
+function findStatementEnd(source, start) {
+  let depth = 0;
+  for (let i = start;i < source.length; ) {
+    const ch = source[i];
+    if (ch === '"' || ch === "'" || ch === "`") {
+      i = skipString(source, i);
+      continue;
+    }
+    if (ch === "{" || ch === "(" || ch === "[")
+      depth += 1;
+    if (ch === "}" || ch === ")" || ch === "]")
+      depth -= 1;
+    if (depth === 0 && (ch === ";" || ch === `
+`))
+      return i;
+    i += 1;
+  }
+  return source.length;
+}
+function findBlockEnd(source, start) {
+  let depth = 0;
+  let opened = false;
+  for (let i = start;i < source.length; ) {
+    const ch = source[i];
+    if (ch === '"' || ch === "'" || ch === "`") {
+      i = skipString(source, i);
+      continue;
+    }
+    if (ch === "{") {
+      depth += 1;
+      opened = true;
+    }
+    if (ch === "}") {
+      depth -= 1;
+      if (opened && depth === 0)
+        return i + 1;
+    }
+    i += 1;
+  }
+  return source.length;
+}
+function isCore(value) {
+  return value instanceof Integer2 || value instanceof Rational2 || value instanceof RationalInterval2 || value?.isCertifiedApproximation === true || value instanceof Fraction || value instanceof FractionInterval || value instanceof RationalIntervalSet;
+}
+var plainDecimal = (text) => text?.replace(/#0(?=$|:)/g, "") ?? null;
+function repeating(rational, digits) {
+  try {
+    return plainDecimal(rational.toRepeatingDecimal(digits, "trunc"));
+  } catch {
+    return null;
+  }
+}
+function formatRational(value, mode, digits) {
+  const exact = value.toString();
+  if (value.denominator === 1n)
+    return exact;
+  if (mode === "exact")
+    return exact;
+  const decimal = repeating(value, digits) ?? value.toDecimal(digits);
+  if (mode === "decimal")
+    return decimal;
+  if (mode === "mixed")
+    return value.toMixedString();
+  if (mode === "cf")
+    return value.toContinuedFractionString();
+  return decimal === exact ? exact : `${exact} = ${decimal}`;
+}
+function formatValue(value, options = {}) {
+  const { mode = "both", digits = 30, depth = 0 } = options;
+  if (value instanceof Rational2)
+    return formatRational(value, mode, digits);
+  if (value instanceof Integer2)
+    return value.toString();
+  if (value instanceof RationalInterval2) {
+    const exact = `${value.low.toString()}:${value.high.toString()}`;
+    if (mode === "exact" || value.low.denominator === 1n && value.high.denominator === 1n)
+      return exact;
+    const decimal = plainDecimal(value.toRepeatingDecimal({ limit: digits })) ?? `${value.low.toDecimal(digits)}:${value.high.toDecimal(digits)}`;
+    if (mode === "decimal")
+      return decimal;
+    return decimal === exact ? exact : `${exact} = ${decimal}`;
+  }
+  if (isCore(value))
+    return value.toString();
+  if (value === undefined)
+    return "undefined";
+  if (value === null)
+    return "null";
+  if (typeof value === "string")
+    return depth === 0 ? value : JSON.stringify(value);
+  if (typeof value === "bigint")
+    return `${value}n`;
+  if (typeof value === "number")
+    return Number.isInteger(value) || !Number.isFinite(value) ? String(value) : `${value} (inexact JS number; R\`…\` keeps it exact)`;
+  if (typeof value === "function")
+    return `[function ${value.name || "anonymous"}]`;
+  if (typeof value === "symbol" || typeof value === "boolean")
+    return String(value);
+  if (depth > 3)
+    return Array.isArray(value) ? "[…]" : "{…}";
+  const inner = { mode: mode === "both" ? "exact" : mode, digits, depth: depth + 1 };
+  if (Array.isArray(value))
+    return `[${value.map((item) => formatValue(item, inner)).join(", ")}]`;
+  if (value instanceof Map)
+    return `Map {${[...value].map(([k, v]) => `${formatValue(k, inner)} => ${formatValue(v, inner)}`).join(", ")}}`;
+  if (value instanceof Set)
+    return `Set {${[...value].map((item) => formatValue(item, inner)).join(", ")}}`;
+  if (value instanceof Error)
+    return `${value.name}: ${value.message}`;
+  const entries = Object.entries(value);
+  return `{${entries.map(([k, v]) => `${k}: ${formatValue(v, inner)}`).join(", ")}}`;
+}
+var HELP_TEXT = `RatCalc is JavaScript with exact rational arithmetic.
+Type any JavaScript; the last expression's value is shown.
+
+  R\`1/3 + 1/6\`            exact arithmetic on Core literals -> 1/2
+  R\`1:2 + 3\`              intervals -> 4:5
+  x = R\`2/3\`; R\`\${x}^2\`  interpolated values stay exact -> 4/9
+  new Rational(1, 7)       Core classes: Integer, Rational, RationalInterval, ...
+  parseNumber("0.#142857") Core parsers: parseNumber, parseInterval, ...
+  [1, 2, 3].map(n => R\`1/\${n}\`)  plain JavaScript works around R
+  let total = R\`0\`         declarations persist between inputs
+  ans                      the previous result
+
+R literals: 3, -2, 1/2, 1..3/4, 0.#3, 1.23[56:67], 1_000, 1.5? ; operators + - * / ^ ! :
+Display: display("both" | "exact" | "decimal" | "mixed" | "cf"), digits(n)
+Commands: help(), vars(), clear()   (terminal: .help .vars .clear .exit)
+JavaScript numbers like 0.1 are inexact; results that are plain numbers say so.`;
+function createSession(options = {}) {
+  const settings = { mode: "both", digits: 30 };
+  const variables = new Map;
+  const blocked = new Set([...BLOCKED, ...options.blocked ?? []]);
+  const actions = { clear: options.onClear ?? (() => {}) };
+  const builtins = {
+    ...exports_core,
+    R,
+    help: () => HELP_TEXT,
+    display(mode) {
+      if (mode === undefined)
+        return settings.mode;
+      if (!DISPLAY_MODES.includes(mode))
+        throw new Error(`display mode must be one of ${DISPLAY_MODES.join(", ")}`);
+      settings.mode = mode;
+      return `display ${mode}`;
+    },
+    digits(n) {
+      if (n === undefined)
+        return settings.digits;
+      if (!Number.isSafeInteger(n) || n < 1 || n > 1e4)
+        throw new Error("digits(n) needs a whole number from 1 to 10000");
+      settings.digits = n;
+      return `digits ${n}`;
+    },
+    vars: () => [...variables.keys()].filter((name) => name !== "ans").map((name) => `${name} = ${formatValue(variables.get(name), settings)}`).join(`
+`) || "(no variables)",
+    clear() {
+      variables.clear();
+      actions.clear();
+      return "cleared";
+    },
+    show: (value) => formatValue(value, settings)
+  };
+  const scope = new Proxy(variables, {
+    has(_target, name) {
+      if (typeof name !== "string")
+        return false;
+      if (name === "eval" || name === "__ratcalcSource")
+        return false;
+      if (blocked.has(name) || variables.has(name) || Object.hasOwn(builtins, name))
+        return true;
+      return !(name in globalThis);
+    },
+    get(_target, name) {
+      if (name === Symbol.unscopables)
+        return;
+      if (blocked.has(name))
+        throw new ReferenceError(`${String(name)} is not available in RatCalc`);
+      if (variables.has(name))
+        return variables.get(name);
+      if (Object.hasOwn(builtins, name))
+        return builtins[name];
+      throw new ReferenceError(`${String(name)} is not defined`);
+    },
+    set(_target, name, value) {
+      if (blocked.has(name))
+        throw new ReferenceError(`${String(name)} is not available in RatCalc`);
+      variables.set(name, value);
+      return true;
+    },
+    deleteProperty(_target, name) {
+      return variables.delete(name);
+    }
+  });
+  const run = new Function("__ratcalcScope", "__ratcalcSource", "with (__ratcalcScope) { return eval(__ratcalcSource); }");
+  function evaluate(source) {
+    const code = String(source ?? "");
+    try {
+      if (/\bimport\s*[(\s{*]|\bimport\.meta\b|\bexport\s/.test(code.replace(/(["'`])(?:\\.|(?!\1)[^\\])*\1/g, ""))) {
+        throw new SyntaxError("import and export are not available in RatCalc");
+      }
+      const value = run(scope, rewriteDeclarations(code));
+      if (value !== undefined)
+        variables.set("ans", value);
+      return { ok: true, value, text: formatValue(value, settings) };
+    } catch (error) {
+      const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+      return { ok: false, error, text: message };
+    }
+  }
+  return { evaluate, settings, variables, format: (value) => formatValue(value, settings) };
+}
+
 // src/IntervalVisualization.js
 class IntervalVisualization {
   constructor(container, options = {}) {
@@ -6955,1929 +6534,323 @@ class IntervalVisualization {
     }
   }
 }
-class MultiStepVisualization {
-  constructor(container, options = {}) {
-    this.container = container;
-    this.width = options.width || 900;
-    this.stages = [];
-    this.inputIntervals = new Map;
-    this.mainDiv = document.createElement("div");
-    this.mainDiv.style.width = "100%";
-    this.mainDiv.style.height = "100%";
-    this.mainDiv.style.overflowY = "auto";
-    this.mainDiv.style.overflowX = "auto";
-    this.stagesDiv = document.createElement("div");
-    this.mainDiv.appendChild(this.stagesDiv);
-    this.container.appendChild(this.mainDiv);
-  }
-  visualizeExpressionTree(tree, finalResult) {
-    this.stages.forEach((stage) => stage.visualization && stage.visualization.destroy());
-    this.stages = [];
-    this.inputIntervals.clear();
-    this.stagesDiv.innerHTML = "";
-    this.evaluateTree(tree, 0);
-    this.stages.forEach((stage, index) => {
-      const stageDiv = document.createElement("div");
-      stageDiv.style.marginBottom = "20px";
-      stageDiv.style.padding = "15px";
-      stageDiv.style.background = "#f9fafb";
-      stageDiv.style.borderRadius = "8px";
-      const label = document.createElement("div");
-      label.style.marginBottom = "10px";
-      label.style.fontWeight = "bold";
-      label.style.color = "#374151";
-      label.textContent = stage.isFinal ? `Final Result` : `Step ${index + 1}: ${stage.expression}`;
-      stageDiv.appendChild(label);
-      const vizContainer = document.createElement("div");
-      stageDiv.appendChild(vizContainer);
-      this.stagesDiv.appendChild(stageDiv);
-      setTimeout(() => {
-        const containerWidth = vizContainer.offsetWidth || vizContainer.clientWidth || 800;
-        const viz = new IntervalVisualization(vizContainer, {
-          width: Math.max(containerWidth - 40, 800),
-          height: 220
-        });
-        stage.visualization = viz;
-        if (stage.type === "operation") {
-          const id1 = viz.addInterval(stage.leftValue, {
-            label: `${stage.leftLabel} [${viz.formatRationalAsMixed(stage.leftValue.low)}:${viz.formatRationalAsMixed(stage.leftValue.high)}]`,
-            color: "#2563eb",
-            draggable: stage.leftDraggable
-          });
-          const id2 = viz.addInterval(stage.rightValue, {
-            label: `${stage.rightLabel} [${viz.formatRationalAsMixed(stage.rightValue.low)}:${viz.formatRationalAsMixed(stage.rightValue.high)}]`,
-            color: "#dc2626",
-            draggable: stage.rightDraggable
-          });
-          const resultId = viz.addInterval(stage.result, {
-            label: `= ${viz.formatRationalAsMixed(stage.result.low)}:${viz.formatRationalAsMixed(stage.result.high)}`,
-            color: "#7c3aed",
-            draggable: false,
-            isResult: true
-          });
-          const operatorBg = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-          operatorBg.setAttribute("cx", viz.margin.left - 30);
-          operatorBg.setAttribute("cy", viz.plotHeight / 2 + viz.margin.top);
-          operatorBg.setAttribute("r", "18");
-          operatorBg.setAttribute("fill", "white");
-          operatorBg.setAttribute("stroke", "#374151");
-          operatorBg.setAttribute("stroke-width", "2");
-          viz.svg.appendChild(operatorBg);
-          const operatorText = document.createElementNS("http://www.w3.org/2000/svg", "text");
-          operatorText.setAttribute("x", viz.margin.left - 30);
-          operatorText.setAttribute("y", viz.plotHeight / 2 + viz.margin.top + 6);
-          operatorText.setAttribute("text-anchor", "middle");
-          operatorText.setAttribute("font-size", "20");
-          operatorText.setAttribute("font-family", "monospace");
-          operatorText.setAttribute("font-weight", "bold");
-          operatorText.setAttribute("fill", "#374151");
-          operatorText.textContent = stage.operator;
-          viz.svg.appendChild(operatorText);
-          if (stage.leftDraggable || stage.rightDraggable) {
-            vizContainer.addEventListener("intervalChange", (e) => {
-              this.handleIntervalChange(e.detail, stage, viz, index);
-            });
-          }
-          stage.leftId = id1;
-          stage.rightId = id2;
-          stage.resultId = resultId;
-        } else {
-          viz.addInterval(stage.value, {
-            label: stage.expression,
-            color: "#2563eb",
-            draggable: false
-          });
-        }
-      }, 0);
-    });
-  }
-  evaluateTree(node, depth) {
-    if (!node)
-      return null;
-    if (node.type === "value") {
-      if (node.isInput) {
-        this.inputIntervals.set(node.expression, {
-          value: node.value,
-          nodes: []
-        });
-      }
-      return { value: node.value, stageIndex: -1, isInput: node.isInput, expression: node.expression };
-    } else if (node.type === "operation") {
-      let leftResult, rightResult;
-      if (node.left.type === "value") {
-        leftResult = {
-          value: node.left.value,
-          stageIndex: -1,
-          isInput: node.left.isInput,
-          expression: node.left.expression
-        };
-        if (node.left.isInput) {
-          this.inputIntervals.set(node.left.expression, {
-            value: node.left.value,
-            nodes: []
-          });
-        }
-      } else {
-        leftResult = this.evaluateTree(node.left, depth + 1);
-      }
-      if (node.right.type === "value") {
-        rightResult = {
-          value: node.right.value,
-          stageIndex: -1,
-          isInput: node.right.isInput,
-          expression: node.right.expression
-        };
-        if (node.right.isInput) {
-          this.inputIntervals.set(node.right.expression, {
-            value: node.right.value,
-            nodes: []
-          });
-        }
-      } else {
-        rightResult = this.evaluateTree(node.right, depth + 1);
-      }
-      let result;
-      switch (node.operation) {
-        case "add":
-          result = leftResult.value.add(rightResult.value);
-          break;
-        case "subtract":
-          result = leftResult.value.subtract(rightResult.value);
-          break;
-        case "multiply":
-          result = leftResult.value.multiply(rightResult.value);
-          break;
-        case "divide":
-          result = leftResult.value.divide(rightResult.value);
-          break;
-      }
-      const currentStageIndex = this.stages.length;
-      const stage = {
-        type: "operation",
-        expression: `${this.getNodeExpression(node.left)} ${node.operator} ${this.getNodeExpression(node.right)}`,
-        operator: node.operator,
-        leftValue: leftResult.value,
-        rightValue: rightResult.value,
-        leftLabel: this.getNodeExpression(node.left),
-        rightLabel: this.getNodeExpression(node.right),
-        leftDraggable: leftResult.isInput,
-        rightDraggable: rightResult.isInput,
-        result,
-        depth,
-        node,
-        leftDependsOnStage: leftResult.stageIndex,
-        rightDependsOnStage: rightResult.stageIndex,
-        leftIsInput: leftResult.isInput,
-        rightIsInput: rightResult.isInput
-      };
-      this.stages.push(stage);
-      return { value: result, stageIndex: currentStageIndex, isInput: false, expression: stage.expression };
-    }
-  }
-  getNodeExpression(node) {
-    if (node.type === "value") {
-      return node.expression;
-    } else {
-      return `(${this.getNodeExpression(node.left)} ${node.operator} ${this.getNodeExpression(node.right)})`;
-    }
-  }
-  handleIntervalChange(detail, changedStage, viz, stageIndex) {
-    if (detail.id === changedStage.leftId) {
-      changedStage.leftValue = detail.interval;
-    } else if (detail.id === changedStage.rightId) {
-      changedStage.rightValue = detail.interval;
-    }
-    changedStage.result = this.calculateStageResult(changedStage);
-    const resultInterval = viz.intervals.find((i) => i.id === changedStage.resultId);
-    if (resultInterval) {
-      resultInterval.interval = changedStage.result;
-      resultInterval.label = `= ${viz.formatRationalAsMixed(changedStage.result.low)}:${viz.formatRationalAsMixed(changedStage.result.high)}`;
-      viz.updateRange();
-      viz.renderAxis();
-      viz.renderIntervals();
-    }
-    this.updateDependentStages(stageIndex);
-  }
-  calculateStageResult(stage) {
-    switch (stage.operator) {
-      case "+":
-        return stage.leftValue.add(stage.rightValue);
-      case "-":
-        return stage.leftValue.subtract(stage.rightValue);
-      case "*":
-        return stage.leftValue.multiply(stage.rightValue);
-      case "/":
-        return stage.leftValue.divide(stage.rightValue);
-      default:
-        return stage.result;
-    }
-  }
-  updateDependentStages(fromIndex) {
-    const stageResults = new Map;
-    for (let i = 0;i < this.stages.length; i++) {
-      if (this.stages[i].type === "operation") {
-        stageResults.set(i, this.stages[i].result);
-      }
-    }
-    for (let i = fromIndex + 1;i < this.stages.length; i++) {
-      const stage = this.stages[i];
-      if (stage.type === "operation") {
-        let updated = false;
-        if (stage.leftDependsOnStage !== undefined && stage.leftDependsOnStage >= 0) {
-          const dependentResult = stageResults.get(stage.leftDependsOnStage);
-          if (dependentResult && !stage.leftValue.equals || stage.leftValue.equals && !stage.leftValue.equals(dependentResult)) {
-            stage.leftValue = dependentResult;
-            updated = true;
-            if (stage.visualization) {
-              const leftInterval = stage.visualization.intervals.find((iv) => iv.id === stage.leftId);
-              if (leftInterval) {
-                leftInterval.interval = dependentResult;
-                leftInterval.label = `${stage.leftLabel} [${stage.visualization.formatRationalAsMixed(dependentResult.low)}:${stage.visualization.formatRationalAsMixed(dependentResult.high)}]`;
-              }
-            }
-          }
-        }
-        if (stage.rightDependsOnStage !== undefined && stage.rightDependsOnStage >= 0) {
-          const dependentResult = stageResults.get(stage.rightDependsOnStage);
-          if (dependentResult && !stage.rightValue.equals || stage.rightValue.equals && !stage.rightValue.equals(dependentResult)) {
-            stage.rightValue = dependentResult;
-            updated = true;
-            if (stage.visualization) {
-              const rightInterval = stage.visualization.intervals.find((iv) => iv.id === stage.rightId);
-              if (rightInterval) {
-                rightInterval.interval = dependentResult;
-                rightInterval.label = `${stage.rightLabel} [${stage.visualization.formatRationalAsMixed(dependentResult.low)}:${stage.visualization.formatRationalAsMixed(dependentResult.high)}]`;
-              }
-            }
-          }
-        }
-        const newResult = this.calculateStageResult(stage);
-        stage.result = newResult;
-        stageResults.set(i, newResult);
-        if (stage.visualization) {
-          const resultInterval = stage.visualization.intervals.find((iv) => iv.id === stage.resultId);
-          if (resultInterval) {
-            resultInterval.interval = newResult;
-            resultInterval.label = `= ${stage.visualization.formatRationalAsMixed(newResult.low)}:${stage.visualization.formatRationalAsMixed(newResult.high)}`;
-          }
-          stage.visualization.updateRange();
-          stage.visualization.renderAxis();
-          stage.visualization.renderIntervals();
-        }
-      }
-    }
-  }
-  fitAllWindows() {
-    this.stages.forEach((stage) => {
-      if (stage.visualization) {
-        stage.visualization.enableAutoRange();
-      }
-    });
-  }
-  exportSVG() {
-    const stageHeight = 240;
-    const totalHeight = this.stages.length * stageHeight;
-    const totalWidth = this.width + 120;
-    let combinedSVG = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" width="${totalWidth}" height="${totalHeight}" viewBox="-60 -30 ${totalWidth} ${totalHeight}">
-<style>
-<![CDATA[
-text { 
-  font-family: "SF Mono", "Monaco", "Cascadia Code", "Roboto Mono", Consolas, "Courier New", monospace;
-  font-size: 12px;
-  fill: #374151;
-}
-line { 
-  stroke-linecap: round; 
-}
-circle {
-  stroke-width: 2;
-}
-]]>
-</style>`;
-    this.stages.forEach((stage, index) => {
-      if (stage.visualization) {
-        const stageSVG = stage.visualization.exportSVG();
-        const contentMatch = stageSVG.match(/<svg[^>]*>(.*)<\/svg>/s);
-        if (contentMatch) {
-          combinedSVG += `<g transform="translate(0, ${index * stageHeight})">${contentMatch[1]}</g>`;
-        }
-      }
-    });
-    combinedSVG += "</svg>";
-    return combinedSVG;
-  }
-  exportHTML() {
-    let html = `<!DOCTYPE html>
-<html>
-<head>
-    <title>Interval Calculation Steps</title>
-    <style>
-        body { font-family: monospace; margin: 20px; }
-        .stage { margin-bottom: 30px; padding: 20px; background: #f9fafb; border-radius: 8px; }
-        .stage-title { font-weight: bold; font-size: 1.2em; margin-bottom: 15px; color: #374151; }
-        .stage-content { border: 1px solid #e5e7eb; border-radius: 4px; }
-    </style>
-</head>
-<body>
-    <h1>Interval Calculation Visualization</h1>`;
-    this.stages.forEach((stage, index) => {
-      if (stage.visualization) {
-        const stageTitle = stage.isFinal ? "Final Result" : `Step ${index + 1}: ${stage.expression}`;
-        const stageSVG = stage.visualization.exportSVG();
-        html += `
-    <div class="stage">
-        <div class="stage-title">${stageTitle}</div>
-        <div class="stage-content">${stageSVG}</div>
-    </div>`;
-      }
-    });
-    html += `
-</body>
-</html>`;
-    return html;
-  }
-  destroy() {
-    this.stages.forEach((stage) => {
-      if (stage.visualization) {
-        stage.visualization.destroy();
-      }
-    });
-    this.stages = [];
-  }
-}
 
 // src/web-calc.js
 class WebCalculator {
-  constructor() {
-    this.outputMode = "BOTH";
-    this.decimalLimit = 20;
-    this.mixedDisplay = true;
-    this.sciPrecision = 10;
-    this.showPeriodInfo = false;
+  constructor(root = document) {
+    this.root = root;
     this.history = [];
     this.historyIndex = -1;
-    this.outputHistory = [];
-    this.currentEntry = null;
+    this.transcript = [];
     this.mobileInput = "";
-    this.mobileKeypadSetup = false;
-    this.variableManager = new VariableManager;
-    this.inputBase = BaseSystem.DECIMAL;
-    this.outputBases = [BaseSystem.DECIMAL];
-    this.customBases = new Map;
-    this.variableManager.setCustomBases(this.customBases);
-    this.currentVisualization = null;
-    this.lastResult = null;
-    this.initializeElements();
-    this.setupEventListeners();
+    this.visualization = null;
+    this.session = createSession({ onClear: () => this.clearOutput() });
+    this.elements();
+    this.listen();
     this.displayWelcome();
-    this.initializeElements();
-    this.setupEventListeners();
-    this.displayWelcome();
-    this.loadModulesFromUrl();
   }
-  initializeElements() {
-    this.inputElement = document.getElementById("calculatorInput");
-    this.outputHistoryElement = document.getElementById("outputHistory");
-    this.helpModal = document.getElementById("helpModal");
-    this.copyButton = document.getElementById("copyButton");
-    this.helpButton = document.getElementById("helpButton");
-    this.clearButton = document.getElementById("clearButton");
-    this.closeHelp = document.getElementById("closeHelp");
-    this.mobileKeypad = document.getElementById("mobileKeypad");
-    this.commandPanel = document.getElementById("commandPanel");
-    this.closeCommandPanel = document.getElementById("closeCommandPanel");
-    this.visualizationModal = document.getElementById("visualizationModal");
-    this.visualizationContainer = document.getElementById("visualizationContainer");
-    this.closeVisualization = document.getElementById("closeVisualization");
-    this.exportSVGBtn = document.getElementById("exportSVGBtn");
-    this.exportHTMLBtn = document.getElementById("exportHTMLBtn");
-    this.saveComputationBtn = document.getElementById("saveComputationBtn");
-    this.stepSizeInput = document.getElementById("stepSizeInput");
+  $(id) {
+    return this.root.getElementById(id);
   }
-  setupEventListeners() {
-    this.inputElement.addEventListener("keydown", (e) => this.handleKeyDown(e));
+  elements() {
+    this.input = this.$("calculatorInput");
+    this.output = this.$("outputHistory");
+    this.helpModal = this.$("helpModal");
+    this.keypad = this.$("mobileKeypad");
+    this.mobileDisplay = this.$("mobileInputDisplay");
+    this.commandPanel = this.$("commandPanel");
+    this.copyButton = this.$("copyButton");
+    this.visualizationModal = this.$("visualizationModal");
+    this.visualizationContainer = this.$("visualizationContainer");
+    this.stepSizeInput = this.$("stepSizeInput");
+    this.saveButton = this.$("saveComputationBtn");
+  }
+  listen() {
+    this.input.addEventListener("keydown", (event) => this.handleKeyDown(event));
     this.copyButton.addEventListener("click", () => this.copySession());
-    this.helpButton.addEventListener("click", () => this.showHelp());
-    this.clearButton.addEventListener("click", () => this.clearHistory());
-    this.closeHelp.addEventListener("click", () => this.hideHelp());
-    this.helpModal.addEventListener("click", (e) => {
-      if (e.target === this.helpModal) {
-        this.hideHelp();
-      }
-    });
-    this.closeVisualization.addEventListener("click", () => this.hideVisualization());
-    this.visualizationModal.addEventListener("click", (e) => {
-      if (e.target === this.visualizationModal) {
+    this.$("helpButton").addEventListener("click", () => this.showHelp());
+    this.$("clearButton").addEventListener("click", () => this.run("clear()"));
+    this.$("closeHelp").addEventListener("click", () => this.hideModal(this.helpModal));
+    this.$("closeVisualization").addEventListener("click", () => this.hideVisualization());
+    this.$("exportSVGBtn").addEventListener("click", () => this.download("interval.svg", "image/svg+xml", this.visualization?.exportSVG()));
+    this.$("exportHTMLBtn").addEventListener("click", () => this.download("interval.html", "text/html", this.visualization?.exportHTML?.()));
+    this.saveButton.addEventListener("click", () => this.saveVisualization());
+    this.stepSizeInput.addEventListener("input", () => this.updateStepSize());
+    for (const modal of [this.helpModal, this.visualizationModal]) {
+      modal.addEventListener("click", (event) => {
+        if (event.target === modal)
+          this.hideModal(modal);
+      });
+    }
+    this.root.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        this.hideModal(this.helpModal);
         this.hideVisualization();
       }
     });
-    this.exportSVGBtn.addEventListener("click", () => this.exportVisualizationSVG());
-    this.exportHTMLBtn.addEventListener("click", () => this.exportVisualizationHTML());
-    this.saveComputationBtn.addEventListener("click", () => this.saveVisualizationToCalculator());
-    this.stepSizeInput.addEventListener("input", () => this.updateVisualizationStepSize());
-    this.stepSizeInput.addEventListener("keydown", (e) => this.handleStepSizeKeydown(e));
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
-        this.hideHelp();
-        this.hideVisualization();
-      } else if (this.visualizationModal.style.display === "block") {
-        this.handleVisualizationKeydown(e);
-      }
-    });
-    if (!this.isMobile()) {
-      setTimeout(() => this.inputElement.focus(), 100);
-    }
-    if (this.isMobile()) {
-      this.inputElement.setAttribute("inputmode", "none");
-      this.inputElement.setAttribute("autocomplete", "off");
-      this.inputElement.setAttribute("autocorrect", "off");
-      this.inputElement.setAttribute("autocapitalize", "off");
-      this.inputElement.setAttribute("spellcheck", "false");
-      this.setupMobileKeypad();
-    }
+    this.setupKeypad();
+    if (!this.isMobile())
+      setTimeout(() => this.input.focus(), 100);
   }
   isMobile() {
-    return window.innerWidth <= 768;
+    return typeof window !== "undefined" && window.innerWidth <= 768;
   }
-  handleKeyDown(e) {
-    switch (e.key) {
-      case "Enter":
-        this.processInput();
-        break;
-      case "ArrowUp":
-        e.preventDefault();
-        this.navigateHistory(-1);
-        break;
-      case "ArrowDown":
-        e.preventDefault();
-        this.navigateHistory(1);
-        break;
+  handleKeyDown(event) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      this.submit();
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      this.navigateHistory(-1);
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      this.navigateHistory(1);
     }
   }
   navigateHistory(direction) {
     if (this.history.length === 0)
       return;
-    if (direction === -1) {
-      if (this.historyIndex === -1) {
-        this.historyIndex = this.history.length - 1;
-      } else if (this.historyIndex > 0) {
-        this.historyIndex--;
-      }
-    } else {
-      if (this.historyIndex === -1)
-        return;
-      if (this.historyIndex < this.history.length - 1) {
-        this.historyIndex++;
-      } else {
-        this.historyIndex = -1;
-        this.inputElement.value = "";
-        return;
-      }
+    if (direction < 0)
+      this.historyIndex = this.historyIndex === -1 ? this.history.length - 1 : Math.max(0, this.historyIndex - 1);
+    else if (this.historyIndex === -1)
+      return;
+    else if (this.historyIndex < this.history.length - 1)
+      this.historyIndex += 1;
+    else {
+      this.historyIndex = -1;
+      this.setInput("");
+      return;
     }
-    this.inputElement.value = this.history[this.historyIndex];
-    setTimeout(() => {
-      this.inputElement.setSelectionRange(this.inputElement.value.length, this.inputElement.value.length);
-    }, 0);
+    this.setInput(this.history[this.historyIndex]);
   }
-  processInput() {
+  currentInput() {
+    return this.isMobile() ? this.mobileInput : this.input.value;
+  }
+  setInput(text) {
     if (this.isMobile()) {
-      const mobileInputValue = this.mobileInput.trim();
-      if (!mobileInputValue)
-        return;
-      this.processExpression(mobileInputValue);
-      this.mobileInput = "";
+      this.mobileInput = text;
       this.updateMobileDisplay();
-      return;
+    } else {
+      this.input.value = text;
+      this.input.focus();
+      this.input.setSelectionRange(text.length, text.length);
     }
-    const input = this.inputElement.value.trim();
-    if (!input) {
-      this.inputElement.focus();
-      return;
-    }
-    this.processExpression(input);
   }
-  processExpression(input) {
-    if (this.history.length === 0 || this.history[this.history.length - 1] !== input) {
-      this.history.push(input);
-    }
+  submit() {
+    const source = this.currentInput().trim();
+    if (!source)
+      return;
+    this.setInput("");
+    this.run(source);
+  }
+  run(source) {
+    this.history.push(source);
     this.historyIndex = -1;
-    this.currentEntry = { input, output: "", isError: false };
-    this.addToOutput(input, null, false);
-    const baseDefMatch = input.match(/^\[(\d+)\]\s*=\s*(.+)$/);
-    if (baseDefMatch) {
-      const baseNum = parseInt(baseDefMatch[1]);
-      const range = baseDefMatch[2].trim();
-      try {
-        if (isNaN(baseNum) || baseNum < 2) {
-          throw new Error("Base number must be an integer >= 2");
-        }
-        const newBase = new BaseSystem(range, `Custom Base ${baseNum}`);
-        if (newBase.base !== baseNum) {
-          throw new Error(`Character sequence length (${newBase.base}) does not match declared base [${baseNum}]`);
-        }
-        this.customBases.set(baseNum, newBase);
-        const output = `Defined custom base [${baseNum}] with characters "${range}"`;
-        this.addToOutput("", output, false);
-        this.finishEntry(output);
-      } catch (error) {
-        const output = `Error defining base: ${error.message}`;
-        this.addToOutput("", output, true);
-        this.currentEntry.isError = true;
-        this.finishEntry(output);
-      }
-      this.inputElement.value = "";
-      return;
-    }
-    const upperInput = input.toUpperCase();
-    if (upperInput === "HELP") {
-      this.showHelp();
-      this.inputElement.value = "";
-      this.currentEntry = null;
-      return;
-    }
-    if (upperInput.startsWith("HELP ")) {
-      const topic = input.substring(5).trim();
-      const helpText = this.variableManager.getHelp(topic);
-      this.addToOutput(input, helpText, false);
-      this.finishEntry(helpText);
-      this.inputElement.value = "";
-      return;
-    }
-    if (upperInput.startsWith("LOAD ")) {
-      const url = input.substring(5).trim();
-      this.addToOutput(input, `Loading module from ${url}...`, false);
-      this.handleLoadCommand(url).then((msg) => {
-        this.addToOutput("", msg, false);
-        this.finishEntry(msg);
-      }).catch((err) => {
-        this.addToOutput("", `Error loading module: ${err.message}`, true);
-        this.finishEntry(`Error: ${err.message}`);
-      });
-      this.inputElement.value = "";
-      return;
-    }
-    if (upperInput === "CLEAR") {
-      this.clearHistory();
-      this.inputElement.value = "";
-      this.currentEntry = null;
-      return;
-    }
-    if (upperInput === "VARS") {
-      this.showVariables();
-      this.inputElement.value = "";
-      this.currentEntry = null;
-      return;
-    }
-    if (upperInput === "DECI") {
-      this.outputMode = "DECI";
-      const output = "Output mode set to decimal";
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-    if (upperInput === "RAT") {
-      this.outputMode = "RAT";
-      const output = "Output mode set to rational";
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-    if (upperInput === "BOTH") {
-      this.outputMode = "BOTH";
-      const output = "Output mode set to both decimal and rational";
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-    if (upperInput === "SCI") {
-      this.outputMode = "SCI";
-      const output = "Output mode set to scientific notation";
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-    if (upperInput === "CF") {
-      this.outputMode = "CF";
-      const output = "Output mode set to continued fraction";
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-    if (upperInput === "MIX") {
-      this.mixedDisplay = !this.mixedDisplay;
-      const output = `Mixed number display ${this.mixedDisplay ? "enabled" : "disabled"}`;
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-    if (upperInput.startsWith("LIMIT")) {
-      const limitStr = upperInput.substring(5).trim();
-      let output;
-      if (limitStr === "") {
-        output = `Current decimal display limit: ${this.decimalLimit} digits`;
-        this.addToOutput("", output, false);
-      } else {
-        const limit = parseInt(limitStr);
-        if (isNaN(limit) || limit < 1) {
-          output = "Error: LIMIT must be a positive integer";
-          this.addToOutput("", output, true);
-          this.currentEntry.isError = true;
-        } else {
-          this.decimalLimit = limit;
-          output = `Decimal display limit set to ${limit} digits`;
-          this.addToOutput("", output, false);
-        }
-      }
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-    if (upperInput.startsWith("SCIPREC")) {
-      const precStr = upperInput.substring(7).trim();
-      let output;
-      if (precStr === "") {
-        output = `Current scientific notation precision: ${this.sciPrecision} digits`;
-        this.addToOutput("", output, false);
-      } else {
-        const precision = parseInt(precStr);
-        if (isNaN(precision) || precision < 1) {
-          output = "Error: SCIPREC must be a positive integer";
-          this.addToOutput("", output, true);
-          this.currentEntry.isError = true;
-        } else {
-          this.sciPrecision = precision;
-          output = `Scientific notation precision set to ${precision} digits`;
-          this.addToOutput("", output, false);
-        }
-      }
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-    if (upperInput === "SCIPERIOD") {
-      this.showPeriodInfo = !this.showPeriodInfo;
-      const output = `Period info in scientific notation ${this.showPeriodInfo ? "enabled" : "disabled"}`;
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-    if (upperInput.startsWith("BASE") && !upperInput.startsWith("BASES")) {
-      this.handleBaseCommand(input);
-      this.inputElement.value = "";
-      return;
-    }
-    if (upperInput === "BIN") {
-      this.inputBase = BaseSystem.BINARY;
-      this.outputBases = [BaseSystem.BINARY];
-      this.variableManager.setInputBase(BaseSystem.BINARY);
-      const output = "Base set to binary (base 2)";
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-    if (upperInput === "HEX") {
-      this.inputBase = BaseSystem.HEXADECIMAL;
-      this.outputBases = [BaseSystem.HEXADECIMAL];
-      this.variableManager.setInputBase(BaseSystem.HEXADECIMAL);
-      const output = "Base set to hexadecimal (base 16)";
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-    if (upperInput === "OCT") {
-      this.inputBase = BaseSystem.OCTAL;
-      this.outputBases = [BaseSystem.OCTAL];
-      this.variableManager.setInputBase(BaseSystem.OCTAL);
-      const output = "Base set to octal (base 8)";
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-    if (upperInput === "DEC") {
-      this.inputBase = BaseSystem.DECIMAL;
-      this.outputBases = [BaseSystem.DECIMAL];
-      this.variableManager.setInputBase(BaseSystem.DECIMAL);
-      const output = "Base set to decimal (base 10)";
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      this.inputElement.value = "";
-      return;
-    }
-    if (upperInput.startsWith("BASES")) {
-      const args = input.trim().substring(5).trim();
-      if (args) {
-        this.handleBasesCommand(args);
-      } else {
-        this.showBases();
-      }
-      this.inputElement.value = "";
-      return;
-    }
-    const varResult = this.variableManager.processInput(input);
-    if (varResult.type === "error") {
-      this.addToOutput("", varResult.message, true);
-      this.currentEntry.isError = true;
-      this.finishEntry(varResult.message);
-    } else if (varResult.type === "assignment" || varResult.type === "function") {
-      const output = varResult.message;
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-    } else {
-      try {
-        this.lastResult = varResult.result;
-        this.lastExpression = input;
-        const output = this.formatResult(varResult.result);
-        this.addToOutput("", output, false, varResult.result, input);
-        this.finishEntry(output);
-      } catch (error) {
-        let errorMessage;
-        if (error.message.includes("Division by zero") || error.message.includes("Denominator cannot be zero")) {
-          errorMessage = "Error: Division by zero is undefined";
-        } else if (error.message.includes("Factorial") && error.message.includes("negative")) {
-          errorMessage = "Error: Factorial is not defined for negative numbers";
-        } else if (error.message.includes("Zero cannot be raised to the power of zero")) {
-          errorMessage = "Error: 0^0 is undefined";
-        } else {
-          errorMessage = `Error: ${error.message}`;
-        }
-        this.addToOutput("", errorMessage, true);
-        this.currentEntry.isError = true;
-        this.finishEntry(errorMessage);
-      }
-    }
-    this.inputElement.value = "";
-    if (!this.isMobile()) {
-      setTimeout(() => this.inputElement.focus(), 50);
-    }
+    const command = source.trim().toLowerCase();
+    const result = command === "help" || command === ".help" ? { ok: true, text: HELP_TEXT, value: undefined } : this.session.evaluate(source);
+    this.addEntry(source, result);
+    return result;
   }
-  finishEntry(output) {
-    if (this.currentEntry) {
-      this.currentEntry.output = output;
-      this.outputHistory.push(this.currentEntry);
-      this.currentEntry = null;
-    }
-  }
-  formatResult(result) {
-    if (result && result.type === "sequence") {
-      return this.variableManager.formatValue(result);
-    } else if (result instanceof RationalInterval) {
-      return this.formatInterval(result);
-    } else if (result instanceof Rational) {
-      return this.formatRational(result);
-    } else if (result instanceof Integer) {
-      return this.formatInteger(result);
-    } else {
-      return result.toString();
-    }
-  }
-  formatInteger(integer) {
-    const decimal = integer.value.toString();
-    const rat = new Rational(integer.value, 1n);
-    const baseRepresentation = this.formatRationalBaseRepresentations(rat);
-    return `${decimal}${baseRepresentation}`;
-  }
-  formatRational(rational) {
-    const repeatingInfo = rational.toRepeatingDecimalWithPeriod();
-    const repeatingDecimal = repeatingInfo.decimal;
-    const period = repeatingInfo.period;
-    const decimal = this.formatDecimal(rational);
-    const fraction = this.mixedDisplay ? rational.toMixedString() : rational.toString();
-    const displayDecimal = this.formatRepeatingExpansion(repeatingDecimal);
-    const periodInfo = period === -1 ? " [period > 10^7]" : period > 0 ? ` {period: ${period}}` : "";
-    const baseRepresentation = this.formatRationalBaseRepresentations(rational);
-    switch (this.outputMode) {
-      case "DECI":
-        return `${displayDecimal}${periodInfo}${baseRepresentation}`;
-      case "RAT":
-        return `${fraction}${baseRepresentation}`;
-      case "SCI":
-        const scientificNotation = rational.toScientificNotation(true, this.sciPrecision, this.showPeriodInfo);
-        return `${scientificNotation} (${fraction})${baseRepresentation}`;
-      case "CF":
-        const continuedFraction = rational.toContinuedFractionString();
-        return `${continuedFraction} (${fraction})${baseRepresentation}`;
-      case "BOTH":
-        if (fraction.includes("/") || fraction.includes("..")) {
-          return `${displayDecimal}${periodInfo} (${fraction})${baseRepresentation}`;
-        } else {
-          return `${decimal}${baseRepresentation}`;
-        }
-      default:
-        return `${displayDecimal}${periodInfo} (${fraction})${baseRepresentation}`;
-    }
-  }
-  formatRationalBaseRepresentations(rational) {
-    if (!this.outputBases.some((base) => base.base !== 10))
-      return "";
-    const baseReprs = [];
-    for (const base of this.outputBases) {
-      if (base.base !== 10) {
-        try {
-          const { baseStr, period: basePeriod } = rational.toRepeatingBaseWithPeriod(base);
-          const formattedBaseStr = this.formatRepeatingExpansion(baseStr);
-          const basePeriodInfo = basePeriod === -1 ? " [period > 10^6]" : basePeriod > 0 ? ` {period: ${basePeriod}}` : "";
-          const prefix = BaseSystem.getPrefixForSystem(base);
-          const formattedOutput = prefix ? `0${prefix}${formattedBaseStr}` : `${formattedBaseStr}[${base.base}]`;
-          baseReprs.push(`${formattedOutput}${basePeriodInfo}`);
-        } catch (error) {}
-      }
-    }
-    if (baseReprs.length > 0) {
-      return ` (${baseReprs.join(", ")})`;
-    }
-    return "";
-  }
-  formatIntervalBaseRepresentations(interval) {
-    if (!this.outputBases.some((base) => base.base !== 10))
-      return "";
-    const baseReprs = [];
-    for (const base of this.outputBases) {
-      if (base.base !== 10) {
-        try {
-          const { baseStr: lowStr } = interval.low.toRepeatingBaseWithPeriod(base);
-          const { baseStr: highStr } = interval.high.toRepeatingBaseWithPeriod(base);
-          const lowFormatted = this.formatRepeatingExpansion(lowStr);
-          const highFormatted = this.formatRepeatingExpansion(highStr);
-          const prefix = BaseSystem.getPrefixForSystem(base);
-          const lowOutput = prefix ? `0${prefix}${lowFormatted}` : `${lowFormatted}[${base.base}]`;
-          const highOutput = prefix ? `0${prefix}${highFormatted}` : `${highFormatted}[${base.base}]`;
-          baseReprs.push(`${lowOutput}:${highOutput}`);
-        } catch (error) {}
-      }
-    }
-    if (baseReprs.length > 0) {
-      return ` (${baseReprs.join(", ")})`;
-    }
-    return "";
-  }
-  formatDecimal(rational) {
-    const decimal = rational.toDecimal();
-    if (decimal.length > this.decimalLimit + 2) {
-      const dotIndex = decimal.indexOf(".");
-      if (dotIndex !== -1 && decimal.length - dotIndex - 1 > this.decimalLimit) {
-        return decimal.substring(0, dotIndex + this.decimalLimit + 1) + "...";
-      }
-    }
-    return decimal;
-  }
-  formatRepeatingExpansion(expansion) {
-    if (!expansion.includes("#")) {
-      if (expansion.length > this.decimalLimit + 2) {
-        const dotIndex = expansion.indexOf(".");
-        if (dotIndex !== -1 && expansion.length - dotIndex - 1 > this.decimalLimit) {
-          return expansion.substring(0, dotIndex + this.decimalLimit + 1) + "...";
-        }
-      }
-      return expansion;
-    }
-    if (expansion.endsWith("#0")) {
-      const withoutRepeating = expansion.substring(0, expansion.length - 2);
-      if (withoutRepeating.length > this.decimalLimit + 2) {
-        const dotIndex = withoutRepeating.indexOf(".");
-        if (dotIndex !== -1 && withoutRepeating.length - dotIndex - 1 > this.decimalLimit) {
-          return withoutRepeating.substring(0, dotIndex + this.decimalLimit + 1) + "...";
-        }
-      }
-      return withoutRepeating;
-    }
-    if (expansion.length > this.decimalLimit + 2) {
-      const hashIndex = expansion.indexOf("#");
-      const beforeHash = expansion.substring(0, hashIndex);
-      const afterHash = expansion.substring(hashIndex + 1);
-      if (beforeHash.length > this.decimalLimit + 1) {
-        return beforeHash.substring(0, this.decimalLimit + 1) + "...";
-      }
-      const remainingSpace = this.decimalLimit + 2 - beforeHash.length;
-      if (remainingSpace <= 1) {
-        return beforeHash + "#...";
-      } else if (afterHash.length > remainingSpace - 1) {
-        return beforeHash + "#" + afterHash.substring(0, remainingSpace - 1) + "...";
-      }
-    }
-    return expansion;
-  }
-  formatInterval(interval) {
-    const lowRepeatingInfo = interval.low.toRepeatingDecimalWithPeriod();
-    const highRepeatingInfo = interval.high.toRepeatingDecimalWithPeriod();
-    const lowRepeating = lowRepeatingInfo.decimal;
-    const highRepeating = highRepeatingInfo.decimal;
-    const lowPeriod = lowRepeatingInfo.period;
-    const highPeriod = highRepeatingInfo.period;
-    const lowFraction = interval.low.toString();
-    const highFraction = interval.high.toString();
-    const lowDisplay = this.formatRepeatingExpansion(lowRepeating);
-    const highDisplay = this.formatRepeatingExpansion(highRepeating);
-    let periodInfo = "";
-    if (lowPeriod > 0 || highPeriod > 0) {
-      const periodParts = [];
-      if (lowPeriod > 0)
-        periodParts.push(`low: ${lowPeriod}`);
-      if (highPeriod > 0)
-        periodParts.push(`high: ${highPeriod}`);
-      periodInfo = ` {period: ${periodParts.join(", ")}}`;
-    }
-    const baseRepresentation = this.formatIntervalBaseRepresentations(interval);
-    switch (this.outputMode) {
-      case "DECI":
-        return `${lowDisplay}:${highDisplay}${periodInfo}${baseRepresentation}`;
-      case "RAT":
-        return `${lowFraction}:${highFraction}${baseRepresentation}`;
-      case "BOTH":
-        const decimalRange = `${lowDisplay}:${highDisplay}${periodInfo}`;
-        const rationalRange = `${lowFraction}:${highFraction}`;
-        if (decimalRange !== rationalRange) {
-          return `${decimalRange} (${rationalRange})${baseRepresentation}`;
-        } else {
-          return `${decimalRange}${baseRepresentation}`;
-        }
-      default:
-        return `${lowFraction}:${highFraction}${baseRepresentation}`;
-    }
-  }
-  loadModulesFromUrl() {
-    if (typeof window === "undefined")
+  addEntry(source, result) {
+    if (source === "clear()" && result.ok)
       return;
-    const params = new URLSearchParams(window.location.search);
-    const loadParam = params.get("load");
-    if (loadParam) {
-      const urls = loadParam.split(",");
-      for (const url of urls) {
-        if (url.trim()) {
-          this.handleLoadCommand(url.trim()).then((msg) => this.addToOutput("", msg, false)).catch((e) => this.addToOutput("", `Auto-load error: ${e.message}`, true));
-        }
-      }
-    }
-  }
-  async handleLoadCommand(inputUrl) {
-    try {
-      let url = inputUrl;
-      let moduleName = "";
-      if (inputUrl.startsWith("@@")) {
-        const name = inputUrl.substring(2).replace(/@$/, "");
-        moduleName = name;
-        url = `${name}.rat`;
-      } else {
-        const basename = url.split(/[/\\]/).pop().split(/[?#]/)[0].split(".")[0];
-        moduleName = basename.charAt(0).toUpperCase() + basename.slice(1);
-      }
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch ${url} (Status ${response.status})`);
-      }
-      const content = await response.text();
-      if (url.endsWith(".js")) {
-        try {
-          const mod = await import(url);
-          const scope = mod.default || mod;
-          if (!scope.functions && !scope.variables) {
-            return `Warning: JS Module '${moduleName}' does not seem to export 'functions' or 'variables'.`;
-          }
-          return this.variableManager.loadModule(moduleName, scope);
-        } catch (e) {
-          throw new Error(`JS Import failed: ${e.message}. Note: WebCalc supports .rat scripts best.`);
-        }
-      } else {
-        const tempVM = new VariableManager;
-        tempVM.setCustomBases(this.customBases);
-        tempVM.setInputBase(this.inputBase);
-        const lines = content.split(`
-`);
-        for (const line of lines) {
-          if (!line.trim() || line.trim().startsWith("#") || line.trim().startsWith("//"))
-            continue;
-          try {
-            tempVM.processInput(line);
-          } catch (e) {}
-        }
-        const modScope = {
-          functions: Object.fromEntries(tempVM.getFunctions()),
-          variables: Object.fromEntries(tempVM.getVariables())
-        };
-        return this.variableManager.loadModule(moduleName, modScope);
-      }
-    } catch (error) {
-      throw error;
-    }
-  }
-  addToOutput(input = null, output = null, isError = false, result = null, expression = null) {
     const entry = document.createElement("div");
     entry.className = "output-entry";
-    if (input) {
-      const inputLine = document.createElement("div");
-      inputLine.className = "input-line";
-      inputLine.innerHTML = `<span class="prompt">></span><span>${this.escapeHtml(input)}</span><span class="reload-icon" title="Reload expression">↻</span>`;
-      inputLine.addEventListener("click", (e) => {
-        if (e.target.classList.contains("reload-icon") || e.currentTarget === inputLine) {
-          e.stopPropagation();
-          this.reloadExpression(input);
-        }
+    const inputLine = document.createElement("div");
+    inputLine.className = "input-line";
+    inputLine.innerHTML = '<span class="prompt">></span><span class="input-text"></span><span class="reload-icon" title="Reload expression">↻</span>';
+    inputLine.querySelector(".input-text").textContent = source;
+    inputLine.addEventListener("click", () => this.setInput(source));
+    entry.appendChild(inputLine);
+    const outputLine = document.createElement("div");
+    outputLine.className = result.ok ? "output-line" : "error-line";
+    outputLine.textContent = result.text;
+    if (result.ok && result.value !== undefined) {
+      const inject = document.createElement("span");
+      inject.className = "inject-icon";
+      inject.title = "Use the value (ans)";
+      inject.textContent = "→";
+      outputLine.appendChild(inject);
+      outputLine.addEventListener("click", (event) => {
+        if (event.target.classList.contains("viz-icon"))
+          return;
+        this.insertAtCursor(this.injection(result.value));
       });
-      entry.appendChild(inputLine);
-    }
-    if (output) {
-      const outputLine = document.createElement("div");
-      outputLine.className = isError ? "error-line" : "output-line";
-      if (!isError) {
-        let icons = `<span class="inject-icon" title="Inject value">→</span>`;
-        if (result && (result instanceof RationalInterval || result.constructor.name === "RationalInterval")) {
-          icons += `<span class="viz-icon" title="Visualize interval">\uD83D\uDCCA</span>`;
-        }
-        outputLine.innerHTML = `${this.escapeHtml(output)}${icons}`;
-        if (expression) {
-          outputLine.dataset.expression = expression;
-        }
-        outputLine.addEventListener("click", (e) => {
-          if (e.target.classList.contains("inject-icon")) {
-            e.stopPropagation();
-            const value = this.extractValue(output);
-            this.injectValue(value);
-          } else if (e.target.classList.contains("viz-icon")) {
-            e.stopPropagation();
-            const storedExpression = outputLine.dataset.expression || "";
-            this.showVisualization(result, storedExpression);
-          } else if (e.currentTarget === outputLine && !e.target.classList.contains("viz-icon")) {
-            e.stopPropagation();
-            const value = this.extractValue(output);
-            this.injectValue(value);
-          }
+      if (result.value instanceof RationalInterval) {
+        const viz = document.createElement("span");
+        viz.className = "viz-icon";
+        viz.title = "Visualize interval";
+        viz.textContent = "\uD83D\uDCCA";
+        viz.addEventListener("click", (event) => {
+          event.stopPropagation();
+          this.showVisualization(result.value, source);
         });
-      } else {
-        outputLine.textContent = output;
-      }
-      entry.appendChild(outputLine);
-    }
-    this.outputHistoryElement.appendChild(entry);
-    if (this.isMobile() && document.body.classList.contains("keypad-visible")) {
-      requestAnimationFrame(() => {
-        this.scrollToKeepAboveInput();
-      });
-    } else {
-      requestAnimationFrame(() => {
-        this.outputHistoryElement.scrollTop = this.outputHistoryElement.scrollHeight;
-      });
-    }
-  }
-  escapeHtml(text) {
-    const div = document.createElement("div");
-    div.textContent = text;
-    return div.innerHTML;
-  }
-  displayWelcome() {
-    const welcome = document.createElement("div");
-    welcome.className = "output-entry";
-    welcome.innerHTML = `
-      <div class="output-line no-mobile" style="color: #059669; font-weight: 600;">
-        Welcome to RatCalc!
-      </div>
-      <div class="output-line no-mobile" style="margin-top: 0.5rem;">
-        Type mathematical expressions and press Enter to calculate.
-      </div>
-      <div class="output-line no-mobile">
-        Use the Help button or type HELP for detailed instructions.
-      </div>
-    `;
-    this.outputHistoryElement.appendChild(welcome);
-  }
-  showHelp() {
-    this.helpModal.style.display = "block";
-    document.body.style.overflow = "hidden";
-  }
-  hideHelp() {
-    this.helpModal.style.display = "none";
-    document.body.style.overflow = "auto";
-    if (!this.isMobile()) {
-      setTimeout(() => this.inputElement.focus(), 100);
-    }
-  }
-  clearHistory() {
-    this.outputHistoryElement.innerHTML = "";
-    this.outputHistory = [];
-    this.currentEntry = null;
-    this.variableManager.clear();
-    this.displayWelcome();
-    if (!this.isMobile()) {
-      setTimeout(() => this.inputElement.focus(), 100);
-    }
-  }
-  showVariables() {
-    const variables = this.variableManager.getVariables();
-    const functions = this.variableManager.getFunctions();
-    if (variables.size === 0 && functions.size === 0) {
-      const output2 = "No variables or functions defined";
-      this.addToOutput("", output2, false);
-      this.finishEntry(output2);
-      return;
-    }
-    let output = "";
-    if (variables.size > 0) {
-      output += `Variables:
-`;
-      for (const [name, value] of variables) {
-        output += `  ${name} = ${this.formatResult(value)}
-`;
+        outputLine.appendChild(viz);
       }
     }
-    if (functions.size > 0) {
-      if (output)
-        output += `
-`;
-      output += `Functions:
-`;
-      for (const [name, func] of functions) {
-        output += `  ${name}[${func.params.join(",")}] = ${func.expression}
-`;
-      }
-    }
-    output = output.trim();
-    this.addToOutput("", output, false);
-    this.finishEntry(output);
-  }
-  async copySession() {
-    if (this.outputHistory.length === 0) {
-      const originalText = this.copyButton.textContent;
-      this.copyButton.textContent = "Nothing to copy";
-      this.copyButton.style.background = "rgba(251, 146, 60, 0.9)";
-      this.copyButton.style.color = "white";
-      setTimeout(() => {
-        this.copyButton.textContent = originalText;
-        this.copyButton.style.background = "";
-        this.copyButton.style.color = "";
-        if (!this.isMobile()) {
-          this.inputElement.focus();
-        }
-      }, 2000);
-      return;
-    }
-    let text = `Ratmath Calculator Session
-`;
-    text += "=".repeat(30) + `
-
-`;
-    for (const entry of this.outputHistory) {
-      if (entry.input) {
-        text += `> ${entry.input}
-`;
-        if (entry.output) {
-          text += `${entry.output}
-`;
-        }
-        text += `
-`;
-      }
-    }
-    try {
-      await navigator.clipboard.writeText(text);
-      const originalText = this.copyButton.textContent;
-      this.copyButton.textContent = "✓ Copied!";
-      this.copyButton.style.background = "rgba(34, 197, 94, 0.9)";
-      this.copyButton.style.color = "white";
-      setTimeout(() => {
-        this.copyButton.textContent = originalText;
-        this.copyButton.style.background = "";
-        this.copyButton.style.color = "";
-      }, 2000);
-    } catch (error) {
-      console.error("Failed to copy to clipboard:", error);
-      if (this.isMobile()) {
-        const textarea = document.createElement("textarea");
-        textarea.value = text;
-        textarea.style.position = "fixed";
-        textarea.style.left = "-9999px";
-        document.body.appendChild(textarea);
-        textarea.select();
-        textarea.setSelectionRange(0, 99999);
-        try {
-          document.execCommand("copy");
-          const originalText = this.copyButton.textContent;
-          this.copyButton.textContent = "✓ Copied!";
-          this.copyButton.style.background = "rgba(34, 197, 94, 0.9)";
-          this.copyButton.style.color = "white";
-          setTimeout(() => {
-            this.copyButton.textContent = originalText;
-            this.copyButton.style.background = "";
-            this.copyButton.style.color = "";
-          }, 2000);
-        } catch (fallbackError) {
-          alert(text);
-        }
-        document.body.removeChild(textarea);
-      } else {
-        const newWindow = window.open("", "_blank");
-        newWindow.document.write(`<pre>${text}</pre>`);
-        newWindow.document.title = "Ratmath Calculator Session";
-      }
-    }
-  }
-  setupMobileKeypad() {
-    if (this.mobileKeypadSetup) {
-      this.mobileKeypad.classList.add("show");
-      document.body.classList.add("keypad-visible");
-      this.updateMobileDisplay();
-      this.scrollToKeepAboveInput();
-      return;
-    }
-    this.mobileKeypadSetup = true;
-    this.mobileKeypad.classList.add("show");
-    document.body.classList.add("keypad-visible");
-    setTimeout(() => {
-      this.updateMobileDisplay();
-      this.scrollToKeepAboveInput();
-    }, 50);
-    const keypadButtons = document.querySelectorAll(".keypad-btn[data-key]");
-    keypadButtons.forEach((button) => {
-      button.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const key = button.getAttribute("data-key");
-        this.insertAtCursor(key);
-      });
-    });
-    const actionButtons = document.querySelectorAll(".keypad-btn[data-action]");
-    actionButtons.forEach((button) => {
-      button.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const action = button.getAttribute("data-action");
-        if (action === "backspace") {
-          this.handleBackspace();
-        } else if (action === "clear") {
-          if (this.isMobile()) {
-            this.mobileInput = "";
-            this.updateMobileDisplay();
-          } else {
-            this.inputElement.value = "";
-            this.inputElement.focus();
-          }
-        } else if (action === "enter") {
-          this.processInput();
-        } else if (action === "help") {
-          this.showHelp();
-        } else if (action === "command") {
-          this.showCommandPanel();
-        }
-      });
-    });
-    this.closeCommandPanel.addEventListener("click", () => {
-      this.hideCommandPanel();
-    });
-    const cmdButtons = document.querySelectorAll(".command-btn");
-    cmdButtons.forEach((button) => {
-      button.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const cmd = button.getAttribute("data-command");
-        if (this.isMobile()) {
-          this.mobileInput = cmd;
-          this.hideCommandPanel();
-          if (cmd !== "LIMIT ") {
-            this.processExpression(cmd);
-            this.mobileInput = "";
-          } else {
-            this.updateMobileDisplay();
-          }
-        } else {
-          this.inputElement.value = cmd;
-          this.hideCommandPanel();
-          if (cmd !== "LIMIT ") {
-            this.processInput();
-          } else {
-            this.inputElement.focus();
-            this.inputElement.setSelectionRange(6, 6);
-          }
-        }
-      });
-    });
-    this.inputElement.addEventListener("focus", (e) => {
-      if (this.isMobile() && this.mobileKeypad.classList.contains("show")) {
-        e.preventDefault();
-        this.inputElement.blur();
-      }
-    });
-    this.outputHistoryElement.addEventListener("scroll", () => {
-      if (document.body.classList.contains("keypad-visible")) {
-        requestAnimationFrame(() => this.enforceScrollBoundary());
-      }
+    entry.appendChild(outputLine);
+    this.output.appendChild(entry);
+    this.transcript.push(`> ${source}
+${result.text}`);
+    requestAnimationFrame(() => {
+      this.output.scrollTop = this.output.scrollHeight;
     });
   }
-  updateMobileDisplay() {
-    if (this.isMobile()) {
-      let tempDiv = document.getElementById("mobileInputDisplay");
-      tempDiv.innerHTML = `<span style="color: #059669; font-weight: bold; font-size: 0.95rem; margin-right: 6px;">></span> <span style="font-size: 0.9rem;">${this.escapeHtml(this.mobileInput || "")}</span>`;
-      if (document.body.classList.contains("keypad-visible")) {
-        tempDiv.style.display = "flex";
-        this.scrollToKeepAboveInput();
-      } else {
-        tempDiv.style.display = "none";
-      }
-    }
-  }
-  scrollToKeepAboveInput() {
-    this.outputHistoryElement.scrollTop = this.outputHistoryElement.scrollHeight;
-  }
-  enforceScrollBoundary() {
-    const inputDisplay = document.getElementById("mobileInputDisplay");
-    if (!inputDisplay)
-      return;
-    this.scrollToKeepAboveInput();
-  }
-  reloadExpression(expression) {
-    if (this.isMobile()) {
-      this.mobileInput = expression;
-      this.updateMobileDisplay();
-    } else {
-      this.inputElement.value = expression;
-      this.inputElement.focus();
-    }
-  }
-  injectValue(value) {
-    if (this.isMobile()) {
-      this.mobileInput += value;
-      this.updateMobileDisplay();
-    } else {
-      this.insertAtCursor(value);
-    }
-  }
-  extractValue(output) {
-    const match = output.match(/^([\d\/.:\-]+)/);
-    return match ? match[1] : "";
+  injection(value) {
+    if (value instanceof RationalInterval)
+      return `R\`${value.low}:${value.high}\``;
+    if (value?.constructor?.name === "Rational" || value?.constructor?.name === "Integer")
+      return `R\`${value}\``;
+    return "ans";
   }
   insertAtCursor(text) {
     if (this.isMobile()) {
       this.mobileInput += text;
       this.updateMobileDisplay();
-    } else {
-      const start = this.inputElement.selectionStart;
-      const end = this.inputElement.selectionEnd;
-      const value = this.inputElement.value;
-      this.inputElement.value = value.substring(0, start) + text + value.substring(end);
-      this.inputElement.selectionStart = this.inputElement.selectionEnd = start + text.length;
-      this.inputElement.focus();
+      return;
     }
+    const { selectionStart: start, selectionEnd: end, value } = this.input;
+    this.input.value = value.slice(0, start) + text + value.slice(end);
+    this.input.selectionStart = this.input.selectionEnd = start + text.length;
+    this.input.focus();
   }
-  handleBackspace() {
+  backspace() {
     if (this.isMobile()) {
-      if (this.mobileInput.length > 0) {
-        this.mobileInput = this.mobileInput.slice(0, -1);
-        this.updateMobileDisplay();
-      }
-    } else {
-      const start = this.inputElement.selectionStart;
-      const end = this.inputElement.selectionEnd;
-      const value = this.inputElement.value;
-      if (start !== end) {
-        this.inputElement.value = value.substring(0, start) + value.substring(end);
-        this.inputElement.selectionStart = this.inputElement.selectionEnd = start;
-      } else if (start > 0) {
-        this.inputElement.value = value.substring(0, start - 1) + value.substring(start);
-        this.inputElement.selectionStart = this.inputElement.selectionEnd = start - 1;
-      }
-      this.inputElement.focus();
+      this.mobileInput = this.mobileInput.slice(0, -1);
+      this.updateMobileDisplay();
+      return;
     }
+    const { selectionStart: start, selectionEnd: end, value } = this.input;
+    const from = start === end ? Math.max(0, start - 1) : start;
+    this.input.value = value.slice(0, from) + value.slice(end);
+    this.input.selectionStart = this.input.selectionEnd = from;
+    this.input.focus();
   }
-  showCommandPanel() {
-    this.commandPanel.classList.add("show");
-  }
-  hideCommandPanel() {
-    this.commandPanel.classList.remove("show");
-  }
-  showVisualization(result, expression = "") {
-    this.visualizationContainer.innerHTML = "";
-    if (this.currentVisualization) {
-      this.currentVisualization.destroy();
-      this.currentVisualization = null;
-    }
-    if (result instanceof RationalInterval) {
-      const isOperation = expression.includes("+") || expression.includes("-") || expression.includes("*") || expression.includes("/");
-      if (isOperation) {
-        const operationTree = this.parseOperationExpression(expression);
-        if (operationTree && operationTree.type === "operation") {
-          this.currentVisualization = new MultiStepVisualization(this.visualizationContainer, {
-            width: this.visualizationContainer.clientWidth || Math.min(window.innerWidth - 100, 900)
-          });
-          this.currentVisualization.visualizeExpressionTree(operationTree, result);
-          this.updateVisualizationStepSize();
-        } else {
-          this.currentVisualization = new IntervalVisualization(this.visualizationContainer, {
-            width: this.visualizationContainer.clientWidth || Math.min(window.innerWidth - 100, 800),
-            height: 200
-          });
-          const label = expression && expression.length <= 20 ? expression : "Interval";
-          this.currentVisualization.addInterval(result, {
-            label,
-            color: "#2563eb",
-            draggable: true
-          });
-          this.updateVisualizationStepSize();
-        }
-      } else {
-        this.currentVisualization = new IntervalVisualization(this.visualizationContainer, {
-          width: this.visualizationContainer.clientWidth || Math.min(window.innerWidth - 100, 800),
-          height: 200
-        });
-        const label = expression && expression.length <= 20 ? expression : "Interval";
-        this.currentVisualization.addInterval(result, {
-          label,
-          color: "#2563eb",
-          draggable: true
-        });
-        this.updateVisualizationStepSize();
-      }
-      this.visualizationContainer.addEventListener("intervalChange", (e) => {
-        this.saveComputationBtn.textContent = "Save Modified Interval";
-        this.saveComputationBtn.classList.add("modified");
+  setupKeypad() {
+    for (const button of this.root.querySelectorAll(".keypad-btn[data-key]")) {
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        this.insertAtCursor(button.dataset.key);
       });
     }
+    const actions = {
+      backspace: () => this.backspace(),
+      clear: () => this.setInput(""),
+      enter: () => this.submit(),
+      help: () => this.showHelp(),
+      command: () => this.commandPanel.classList.add("show")
+    };
+    for (const button of this.root.querySelectorAll(".keypad-btn[data-action]")) {
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        actions[button.dataset.action]?.();
+      });
+    }
+    this.$("closeCommandPanel").addEventListener("click", () => this.commandPanel.classList.remove("show"));
+    for (const button of this.root.querySelectorAll(".command-btn")) {
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        this.commandPanel.classList.remove("show");
+        this.run(button.dataset.command);
+      });
+    }
+    if (this.isMobile()) {
+      for (const [name, value] of [["inputmode", "none"], ["autocomplete", "off"], ["autocorrect", "off"], ["autocapitalize", "off"]]) {
+        this.input.setAttribute(name, value);
+      }
+      this.keypad.classList.add("show");
+      document.body.classList.add("keypad-visible");
+      this.updateMobileDisplay();
+    }
+  }
+  updateMobileDisplay() {
+    if (!this.mobileDisplay)
+      return;
+    this.mobileDisplay.innerHTML = '<span class="mobile-prompt">></span> <span class="mobile-text"></span>';
+    this.mobileDisplay.querySelector(".mobile-text").textContent = this.mobileInput;
+    this.mobileDisplay.style.display = document.body.classList.contains("keypad-visible") ? "flex" : "none";
+    this.output.scrollTop = this.output.scrollHeight;
+  }
+  displayWelcome() {
+    const welcome = document.createElement("div");
+    welcome.className = "output-entry welcome";
+    welcome.innerHTML = `
+      <div class="output-line no-mobile" style="color: #059669; font-weight: 600;">Welcome to RatCalc — JavaScript with exact rational arithmetic.</div>
+      <div class="output-line no-mobile">Try <code>R\`1:2 + 3\`</code>, <code>let x = R\`1/3\`</code>, or <code>[1, 2, 3].map(n =&gt; R\`1/\${n}\`)</code>.</div>
+      <div class="output-line no-mobile">Type <code>help()</code> or use the Help button.</div>`;
+    this.output.appendChild(welcome);
+  }
+  clearOutput() {
+    this.output.innerHTML = "";
+    this.transcript = [];
+    this.displayWelcome();
+  }
+  showHelp() {
+    this.helpModal.style.display = "block";
+  }
+  hideModal(modal) {
+    if (modal === this.visualizationModal)
+      return this.hideVisualization();
+    modal.style.display = "none";
+    if (!this.isMobile())
+      setTimeout(() => this.input.focus(), 50);
+  }
+  async copySession() {
+    const text = this.transcript.join(`
+`);
+    const label = this.copyButton.textContent;
+    try {
+      if (!text)
+        throw new Error("empty");
+      await navigator.clipboard.writeText(text);
+      this.copyButton.textContent = "Copied";
+    } catch {
+      this.copyButton.textContent = text ? "Copy failed" : "Nothing to copy";
+    }
+    setTimeout(() => {
+      this.copyButton.textContent = label;
+    }, 1500);
+  }
+  showVisualization(interval, label) {
+    this.visualizationContainer.innerHTML = "";
+    this.visualization?.destroy?.();
+    this.visualization = new IntervalVisualization(this.visualizationContainer, {
+      width: this.visualizationContainer.clientWidth || Math.min(window.innerWidth - 100, 800),
+      height: 200
+    });
+    this.visualization.addInterval(interval, { label: label.length <= 24 ? label : "Interval", color: "#2563eb", draggable: true });
+    this.updateStepSize();
     this.visualizationModal.style.display = "block";
-    document.body.style.overflow = "hidden";
   }
   hideVisualization() {
     this.visualizationModal.style.display = "none";
-    document.body.style.overflow = "auto";
-    if (this.currentVisualization) {
-      this.currentVisualization.destroy();
-      this.currentVisualization = null;
-    }
-    this.saveComputationBtn.textContent = "Save to Calculator";
-    this.saveComputationBtn.classList.remove("modified");
-    this.stepSizeInput.value = "10";
-    if (!this.isMobile()) {
-      setTimeout(() => this.inputElement.focus(), 100);
-    }
+    this.visualization?.destroy?.();
+    this.visualization = null;
   }
-  handleStepSizeKeydown(e) {
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      const currentValue = parseInt(this.stepSizeInput.value) || 10;
-      this.stepSizeInput.value = Math.max(1, currentValue + 1);
-      this.updateVisualizationStepSize();
-    } else if (e.key === "ArrowDown") {
-      e.preventDefault();
-      const currentValue = parseInt(this.stepSizeInput.value) || 10;
-      this.stepSizeInput.value = Math.max(1, currentValue - 1);
-      this.updateVisualizationStepSize();
-    }
+  updateStepSize() {
+    const n = Math.max(1, Number.parseInt(this.stepSizeInput.value, 10) || 10);
+    this.visualization?.setDragStepSize?.(this.session.evaluate(`R\`1/${n}\``).value);
   }
-  handleVisualizationKeydown(e) {
-    if (e.target.tagName.toLowerCase() === "input") {
+  saveVisualization() {
+    const interval = this.visualization?.intervals?.[0]?.interval;
+    if (!interval)
       return;
-    }
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      const currentValue = parseInt(this.stepSizeInput.value) || 10;
-      this.stepSizeInput.value = Math.max(1, currentValue + 1);
-      this.updateVisualizationStepSize();
-    } else if (e.key === "ArrowDown") {
-      e.preventDefault();
-      const currentValue = parseInt(this.stepSizeInput.value) || 10;
-      this.stepSizeInput.value = Math.max(1, currentValue - 1);
-      this.updateVisualizationStepSize();
-    }
+    this.insertAtCursor(this.injection(interval));
+    this.hideVisualization();
   }
-  updateVisualizationStepSize() {
-    const n = parseInt(this.stepSizeInput.value) || 10;
-    const stepSize = new Rational(1, n);
-    if (this.currentVisualization) {
-      if (this.currentVisualization.setDragStepSize) {
-        this.currentVisualization.setDragStepSize(stepSize);
-      } else if (this.currentVisualization.stages) {
-        this.currentVisualization.stages.forEach((stage) => {
-          if (stage.visualization && stage.visualization.setDragStepSize) {
-            stage.visualization.setDragStepSize(stepSize);
-          }
-        });
-      }
-    }
-  }
-  exportVisualizationSVG() {
-    if (this.currentVisualization) {
-      const svgData = this.currentVisualization.exportSVG();
-      const blob = new Blob([svgData], { type: "image/svg+xml" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "interval_visualization.svg";
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-    }
-  }
-  exportVisualizationHTML() {
-    if (this.currentVisualization && this.currentVisualization.exportHTML) {
-      const htmlData = this.currentVisualization.exportHTML();
-      const blob = new Blob([htmlData], { type: "text/html" });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "interval_visualization.html";
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-    }
-  }
-  saveVisualizationToCalculator() {
-    if (!this.currentVisualization)
+  download(name, type, data) {
+    if (!data)
       return;
-    let interval = null;
-    if (this.currentVisualization instanceof MultiStepVisualization) {
-      if (this.currentVisualization.stages.length > 0) {
-        const lastStage = this.currentVisualization.stages[this.currentVisualization.stages.length - 1];
-        if (lastStage.type === "operation" && lastStage.result) {
-          interval = lastStage.result;
-        }
-      }
-    } else if (this.currentVisualization.intervals && this.currentVisualization.intervals.length > 0) {
-      const intervalData = this.currentVisualization.intervals[0];
-      interval = intervalData.interval;
-    }
-    if (interval) {
-      const value = `${interval.low.toString()}:${interval.high.toString()}`;
-      this.injectValue(value);
-      this.hideVisualization();
-    }
-  }
-  handleBaseCommand(command) {
-    const parts = command.split(/\s+/);
-    if (parts.length === 1) {
-      let output;
-      if (this.outputBases.length === 1 && this.inputBase.equals(this.outputBases[0])) {
-        output = `Current base: ${this.inputBase.name} (base ${this.inputBase.base})`;
-      } else {
-        output = `Input base: ${this.inputBase.name} (base ${this.inputBase.base})
-Output base${this.outputBases.length > 1 ? "s" : ""}: ${this.outputBases.map((b) => `${b.name} (base ${b.base})`).join(", ")}`;
-      }
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-      return;
-    }
-    const baseSpec = parts.slice(1).join(" ");
-    if (baseSpec.includes("->")) {
-      this.handleInputOutputBaseCommand(baseSpec);
-      return;
-    }
-    if (baseSpec.length === 1) {
-      const prefixSystem = BaseSystem.getSystemForPrefix(baseSpec);
-      if (prefixSystem) {
-        this.inputBase = prefixSystem;
-        this.outputBases = [prefixSystem];
-        this.variableManager.setInputBase(prefixSystem);
-        const prefix = BaseSystem.getPrefixForSystem(prefixSystem);
-        const prefixInfo = prefix ? ` (prefix 0${prefix})` : "";
-        const output = `Base set to ${prefixSystem.name}${prefixInfo} (base ${prefixSystem.base})`;
-        this.addToOutput("", output, false);
-        this.finishEntry(output);
-        return;
-      }
-    }
-    this.handleLegacyBaseCommand(baseSpec);
-  }
-  handleInputOutputBaseCommand(baseSpec) {
-    const [inputSpec, outputSpec] = baseSpec.split("->", 2);
-    if (!inputSpec.trim() || !outputSpec.trim()) {
-      const output2 = "Error: Invalid input->output format. Use BASE 3->10 or BASE 3->[10,5,3]";
-      this.addToOutput("", output2, true);
-      this.currentEntry.isError = true;
-      this.finishEntry(output2);
-      return;
-    }
-    try {
-      this.inputBase = this.parseBaseSpec(inputSpec.trim());
-      this.variableManager.setInputBase(this.inputBase);
-    } catch (error) {
-      const output2 = `Error parsing input base: ${error.message}`;
-      this.addToOutput("", output2, true);
-      this.currentEntry.isError = true;
-      this.finishEntry(output2);
-      return;
-    }
-    try {
-      const trimmedOutput = outputSpec.trim();
-      if (trimmedOutput.startsWith("[") && trimmedOutput.endsWith("]")) {
-        const baseSpecs = trimmedOutput.slice(1, -1).split(",").map((s) => s.trim());
-        if (baseSpecs.length === 0) {
-          throw new Error("Empty output base list");
-        }
-        this.outputBases = baseSpecs.map((spec) => this.parseBaseSpec(spec));
-      } else {
-        this.outputBases = [this.parseBaseSpec(trimmedOutput)];
-      }
-    } catch (error) {
-      const output2 = `Error parsing output base(s): ${error.message}`;
-      this.addToOutput("", output2, true);
-      this.currentEntry.isError = true;
-      this.finishEntry(output2);
-      return;
-    }
-    const outputBaseNames = this.outputBases.map((b) => `${b.name} (base ${b.base})`).join(", ");
-    const output = `Input base: ${this.inputBase.name} (base ${this.inputBase.base})
-Output base${this.outputBases.length > 1 ? "s" : ""}: ${outputBaseNames}`;
-    this.addToOutput("", output, false);
-    this.finishEntry(output);
-  }
-  handleLegacyBaseCommand(baseSpec) {
-    try {
-      const base = this.parseBaseSpec(baseSpec);
-      this.inputBase = base;
-      this.outputBases = [base];
-      this.variableManager.setInputBase(base);
-      const output = `Base set to ${base.name} (base ${base.base})`;
-      this.addToOutput("", output, false);
-      this.finishEntry(output);
-    } catch (error) {
-      const output = `Error: ${error.message}`;
-      this.addToOutput("", output, true);
-      this.currentEntry.isError = true;
-      this.finishEntry(output);
-    }
-  }
-  handleBasesCommand(args) {
-    const parts = args.split(",").map((p) => p.trim());
-    let output = "";
-    const errors = [];
-    for (const part of parts) {
-      if (part.includes(":")) {
-        const [prefix, def] = part.split(":").map((s) => s.trim());
-        if (prefix.length !== 1) {
-          errors.push(`Prefix '${prefix}' must be a single character`);
-          continue;
-        }
-        try {
-          const base = this.parseBaseSpec(def);
-          BaseSystem.registerPrefix(prefix, base);
-          output += `Linked prefix '0${prefix}' to ${base.name}
-`;
-        } catch (e) {
-          errors.push(`Error linking '${prefix}': ${e.message}`);
-        }
-      } else {
-        errors.push(`Invalid format '${part}'. Use prefix:base (e.g. t:32)`);
-      }
-    }
-    if (errors.length > 0) {
-      output += `
-Errors:
-` + errors.join(`
-`);
-    }
-    if (output) {
-      this.addToOutput("", output.trim(), errors.length > 0);
-      this.finishEntry(output.trim());
-    }
-  }
-  parseBaseSpec(baseSpec) {
-    const trimmed = baseSpec.trim();
-    if (trimmed.includes(":") && !trimmed.startsWith("[") && !trimmed.endsWith("]")) {
-      const splitIndex = trimmed.indexOf(":");
-      const prefix = trimmed.substring(0, splitIndex).trim();
-      const def = trimmed.substring(splitIndex + 1).trim();
-      if (prefix.length === 1) {
-        try {
-          const base = this.parseBaseSpec(def);
-          BaseSystem.registerPrefix(prefix, base);
-          return base;
-        } catch (e) {}
-      }
-    }
-    const prefixSystem = BaseSystem.getSystemForPrefix(trimmed);
-    if (prefixSystem)
-      return prefixSystem;
-    const upper = trimmed.toUpperCase();
-    if (upper === "BIN" || upper === "BINARY")
-      return BaseSystem.BINARY;
-    if (upper === "OCT" || upper === "OCTAL")
-      return BaseSystem.OCTAL;
-    if (upper === "HEX" || upper === "HEXADECIMAL")
-      return BaseSystem.HEXADECIMAL;
-    if (upper === "DEC" || upper === "DECIMAL")
-      return BaseSystem.DECIMAL;
-    const numericBase = parseInt(trimmed);
-    const isNumericBaseId = !isNaN(numericBase) && /^\d+$/.test(trimmed) && numericBase >= 2 && numericBase <= 62 && !trimmed.startsWith("0");
-    if (isNumericBaseId) {
-      if (this.customBases.has(numericBase)) {
-        return this.customBases.get(numericBase);
-      }
-      return BaseSystem.fromBase(numericBase);
-    }
-    if (trimmed.length >= 2) {
-      return new BaseSystem(trimmed, `Custom Base ${trimmed}`);
-    }
-    throw new Error("Invalid base specification. Use a prefix (x, b, o, d, t), a name (HEX, BIN), a number (2-62), or character sequence (min length 2)");
-  }
-  showBases() {
-    let output = `Available base systems:
-
-Standard bases:
-`;
-    output += `  Binary (BIN):       base 2
-`;
-    output += `  Octal (OCT):        base 8
-`;
-    output += `  Decimal (DEC):      base 10
-`;
-    output += `  Hexadecimal (HEX):  base 16
-`;
-    output += `  Base 36:            base 36
-`;
-    output += `  Base 62:            base 62
-
-`;
-    output += `Base commands:
-`;
-    output += `  BASE                - Show current base
-`;
-    output += `  BASE <n>            - Set base to n (2-62)
-`;
-    output += `  BASE <a>:<n>        - Set base to n (2-62) and link to prefix a (a-Z)
-`;
-    output += `  BASE <sequence>     - Set custom base using character sequence
-`;
-    output += `  BASE <in>-><out>    - Set input base <in> and output base <out>
-`;
-    output += `  BASE <in>->[<out1>,<out2>,...] - Set input base and multiple output bases
-`;
-    output += `  BIN, HEX, OCT, DEC  - Quick base shortcuts
-`;
-    output += `  BASES               - Show this help
-`;
-    output += "  BASES a:n, b:m...   - Link multiple prefixes to bases (e.g., BASES t:32, z:62)";
-    this.addToOutput("", output, false);
-    this.finishEntry(output);
-  }
-  parseExpressionTree(expr) {
-    expr = expr.trim();
-    if (expr.startsWith("(") && expr.endsWith(")")) {
-      let depth = 0;
-      let valid = true;
-      for (let i = 0;i < expr.length - 1; i++) {
-        if (expr[i] === "(")
-          depth++;
-        else if (expr[i] === ")")
-          depth--;
-        if (depth === 0) {
-          valid = false;
-          break;
-        }
-      }
-      if (valid)
-        expr = expr.slice(1, -1).trim();
-    }
-    const hasColon = expr.includes(":");
-    const operators = [
-      { symbols: ["+", "-"], precedence: 1 },
-      { symbols: ["*", "/"], precedence: 2 }
-    ];
-    for (const opGroup of operators) {
-      let parenDepth = 0;
-      for (let i = expr.length - 1;i >= 0; i--) {
-        if (expr[i] === ")")
-          parenDepth++;
-        else if (expr[i] === "(")
-          parenDepth--;
-        else if (parenDepth === 0 && opGroup.symbols.includes(expr[i])) {
-          const leftExpr = expr.substring(0, i).trim();
-          const rightExpr = expr.substring(i + 1).trim();
-          const operator = expr[i];
-          if (operator === "-" && (leftExpr === "" || leftExpr.trim() === "")) {
-            continue;
-          }
-          if (operator === "-" && i > 0) {
-            let prevChar = "";
-            for (let j = i - 1;j >= 0; j--) {
-              if (expr[j] !== " ") {
-                prevChar = expr[j];
-                break;
-              }
-            }
-            if (["+", "-", "*", "/", "(", ":"].includes(prevChar)) {
-              continue;
-            }
-          }
-          if (hasColon && operator === "/") {
-            if (rightExpr.includes(":")) {
-              continue;
-            }
-            if (leftExpr.includes(":")) {
-              continue;
-            }
-            try {
-              Parser.parse(expr);
-              continue;
-            } catch (e) {}
-          }
-          const leftTree = this.parseExpressionTree(leftExpr);
-          const rightTree = this.parseExpressionTree(rightExpr);
-          const operationMap = {
-            "+": "add",
-            "-": "subtract",
-            "*": "multiply",
-            "/": "divide"
-          };
-          return {
-            type: "operation",
-            operator,
-            operation: operationMap[operator],
-            left: leftTree,
-            right: rightTree
-          };
-        }
-      }
-    }
-    try {
-      const value = Parser.parse(expr);
-      const interval = value instanceof RationalInterval ? value : RationalInterval.point(value instanceof Integer ? value.toRational() : value);
-      return {
-        type: "value",
-        value: interval,
-        expression: expr,
-        isInput: true
-      };
-    } catch (e) {
-      console.error("Failed to parse value:", expr, e);
-      return null;
-    }
-  }
-  loadModulesFromUrl() {
-    if (typeof window === "undefined" || !window.location)
-      return;
-    const params = new URLSearchParams(window.location.search);
-    const loadParam = params.get("load");
-    if (loadParam) {
-      const urls = loadParam.split(",");
-      for (const url of urls) {
-        if (url.trim()) {
-          this.handleLoadCommand(url.trim()).then((msg) => this.addToOutput("", msg, false)).catch((e) => this.addToOutput("", `Auto-load error: ${e.message}`, true));
-        }
-      }
-    }
-  }
-  async handleLoadCommand(inputUrl) {
-    try {
-      let url = inputUrl;
-      let moduleName = "";
-      if (inputUrl.startsWith("@@")) {
-        const name = inputUrl.substring(2).replace(/@$/, "");
-        moduleName = name;
-        url = `${name}.rat`;
-      } else {
-        const basename = url.split(/[/\]/).pop().split(/[?#]/)[0].split(".")[0];
-        moduleName = basename.charAt(0).toUpperCase() + basename.slice(1);
-      }
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch ${url} (Status ${response.status})`);
-      }
-      const content = await response.text();
-      if (url.endsWith(".js")) {
-        try {
-          const mod = await import(url);
-          const scope = mod.default || mod;
-          if (!scope.functions && !scope.variables) {
-            return `Warning: JS Module '${moduleName}' does not seem to export 'functions' or 'variables'.`;
-          }
-          return this.variableManager.loadModule(moduleName, scope);
-        } catch (e) {
-          throw new Error(`JS Import failed: ${e.message}. Note: WebCalc supports .rat scripts best.`);
-        }
-      } else {
-        const tempVM = new VariableManager;
-        tempVM.setCustomBases(this.customBases);
-        tempVM.setInputBase(this.inputBase);
-        const lines = content.split(`
-`);
-        for (const line of lines) {
-          if (!line.trim() || line.trim().startsWith("#") || line.trim().startsWith("//"))
-            continue;
-          try {
-            tempVM.processInput(line);
-          } catch (e) {}
-        }
-        const modScope = {
-          functions: Object.fromEntries(tempVM.getFunctions()),
-          variables: Object.fromEntries(tempVM.getVariables())
-        };
-        return this.variableManager.loadModule(moduleName, modScope);
-      }
-    } catch (error) {
-      throw error;
-    }
+    const url = URL.createObjectURL(new Blob([data], { type }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    link.click();
+    URL.revokeObjectURL(url);
   }
 }
-if (typeof document !== "undefined") {
-  document.addEventListener("DOMContentLoaded", () => {
-    new WebCalculator;
-  });
+if (typeof document !== "undefined" && typeof document.getElementById === "function" && document.getElementById("calculatorInput")) {
+  globalThis.ratcalc = new WebCalculator(document);
 }
 export {
   WebCalculator

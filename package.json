@@ -11,15 +11,16 @@
         "build-reals": "bun build ../../packages/reals/src/ratmath-module.js --outfile docs/reals.js --format esm --target browser",
         "build-oracles": "bun build ../../packages/oracles/src/ratmath-module.ts --outfile docs/oracles.js --format esm --target browser",
         "build-all": "bun run build-web && bun run build-stern-brocot && bun run build-showcase && bun run build-library && bun run build-reals && bun run build-oracles",
-        "serve": "python3 -m http.server 3000 --directory docs"
+        "serve": "python3 -m http.server 3000 --directory docs",
+        "test": "bun test tests"
     },
     "dependencies": {
-        "@ratmath/core": "^0.6.0",
+        "@ratmath/core": "workspace:*",
         "@ratmath/parser": "^0.2.0",
-        "@ratmath/algebra": "^0.2.0",
         "@ratmath/reals": "^0.1.0",
         "@ratmath/oracles": "workspace:*",
-        "@ratmath/stdlib": "^0.2.0"
+        "ratcalc": "workspace:*"
     },
-    "devDependencies": {}
+    "devDependencies": {},
+    "description": "RatMath web pages: RatCalc (a JavaScript calculator with exact arithmetic), Stern-Brocot explorer, showcase"
 }
