@@ -5,7 +5,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>RatMath Library - Interactive Showcase</title>
-    <meta name="description" content="Explore the RatMath JavaScript library with interactive examples" />
+    <meta name="description" content="Explore the RatMath Core JavaScript API: the R tag, exact values, intervals, continued fractions, bases and sums" />
     <meta name="keywords" content="ratmath, javascript, library, rational, arithmetic, bigint, examples" />
     <meta name="author" content="James Taylor" />
     <link rel="icon"
@@ -40,58 +40,47 @@
             <div class="features-grid">
                 <div class="feature-card">
                     <h3>🎯 Exact Arithmetic</h3>
-                    <p>
-                        No floating-point errors. Every calculation
-                        maintains perfect precision using BigInt internally.
-                    </p>
+                    <p>No floating-point errors: every value is an exact BigInt fraction.</p>
                     <div class="code-example">
-                        <pre><code>// JavaScript floats
-0.1 + 0.2 === 0.3  // false!
+                        <pre><code>// JavaScript numbers
+0.1 + 0.2 === 0.3              // false
 
 // RatMath
-R`0.1 + 0.2`.equals(R`0.3`)  // true!</code></pre>
+R`0.1 + 0.2`.equals(R`0.3`)    // true</code></pre>
                     </div>
                 </div>
 
                 <div class="feature-card">
                     <h3>📊 Interval Arithmetic</h3>
-                    <p>
-                        Built-in support for interval calculations, perfect
-                        for uncertainty analysis.
-                    </p>
+                    <p>Intervals carry exact bounds through every operation.</p>
                     <div class="code-example">
-                        <pre><code>// Create intervals
-const a = R`1:2`      // [1, 2]
-const b = R`0.5:1.5`  // [0.5, 1.5]
-
-// Operations preserve bounds
-R`1:2 + 0.5:1.5`  // [1.5, 3.5]</code></pre>
+                        <pre><code>const a = R`1:2`
+const b = R`0.5:1.5`
+a.add(b)                       // 3/2:7/2
+R`1:2 + 0.5:1.5`               // 3/2:7/2
+R`1.5[+-0.01]`                 // 1.499:1.501</code></pre>
                     </div>
                 </div>
 
                 <div class="feature-card">
                     <h3>🔢 Type System</h3>
-                    <p>
-                        Smart type promotion: Integer → Rational →
-                        RationalInterval as needed.
-                    </p>
+                    <p>Results promote Integer → Rational → RationalInterval only as needed.</p>
                     <div class="code-example">
-                        <pre><code>R`5 + 7`        // Integer(12)
-R`5 / 2`        // Rational(5/2)
-R`5 + 1:2`      // RationalInterval([6, 7])</code></pre>
+                        <pre><code>R`5 + 7`        // Integer 12
+R`5 / 2`        // Rational 5/2
+R`5 + 1:2`      // RationalInterval 6:7</code></pre>
                     </div>
                 </div>
 
                 <div class="feature-card">
-                    <h3>🎨 Rich Notation</h3>
-                    <p>
-                        Support for mixed numbers, repeating decimals,
-                        continued fractions, and more.
-                    </p>
+                    <h3>🎨 RiX Notation</h3>
+                    <p>Literals inside <code>R`…`</code> are spelled as in the RiX language.</p>
                     <div class="code-example">
-                        <pre><code>R`2..1/3`    // Mixed: 2 and 1/3
-R`0.#3`      // Repeating: 0.333... = 1/3
-R`3.~7~15~1` // Continued fraction = 355/113</code></pre>
+                        <pre><code>R`2..1/3`       // mixed: 7/3
+R`0.#3`         // repeating: 1/3
+R`3.~7~15~1`    // continued fraction: 355/113
+R`2.5_^-2`      // radix shift: 1/40 (no E notation)
+R`0xff.8`       // base prefix: 511/2</code></pre>
                     </div>
                 </div>
             </div>
@@ -99,84 +88,90 @@ R`3.~7~15~1` // Continued fraction = 355/113</code></pre>
 
         <section id="examples" class="section">
             <h2>Interactive Examples</h2>
+            <p>Each box evaluates its text with <code>R</code>; edit it and press Enter.</p>
 
             <div class="example-box">
                 <h3>Basic Arithmetic</h3>
+                <p class="example-note">Fractions, powers, factorials (<code>!</code>, <code>!!</code>) and mixed numbers.</p>
                 <div class="example-input">
-                    <input type="text" id="basic-expr" value="1/3 + 1/6" placeholder="Enter expression" />
-                    <button onclick="evaluateBasic()">Evaluate</button>
+                    <input type="text" id="basic-expr" value="1/3 + 1/6 + 5!/3!" placeholder="e.g., 2^-3 + 1..1/2" />
+                    <button id="basic-button">Evaluate</button>
                 </div>
                 <div class="example-output" id="basic-output"></div>
             </div>
-
             <div class="example-box">
                 <h3>Repeating Decimals</h3>
+                <p class="example-note"><code>#</code> starts the repeating part; results show their period.</p>
                 <div class="example-input">
-                    <input type="text" id="repeat-expr" value="0.#142857 * 7" placeholder="e.g., 0.#3, 0.#142857" />
-                    <button onclick="evaluateRepeating()">Evaluate</button>
+                    <input type="text" id="repeating-expr" value="0.#142857 * 7" placeholder="e.g., 0.#3, 1.2#34, 0.{3~4}1" />
+                    <button id="repeating-button">Evaluate</button>
                 </div>
-                <div class="example-output" id="repeat-output"></div>
+                <div class="example-output" id="repeating-output"></div>
             </div>
-
             <div class="example-box">
                 <h3>Interval Operations</h3>
+                <p class="example-note">Intervals and uncertainty; shows width, midpoint and the shortest decimal inside.</p>
                 <div class="example-input">
-                    <input type="text" id="interval-expr" value="(1.4:1.6) * (2.9:3.1)"
-                        placeholder="e.g., 1:2 + 0.5:1" />
-                    <button onclick="evaluateInterval()">Evaluate</button>
+                    <input type="text" id="interval-expr" value="(1.4:1.6) * (2.9:3.1)" placeholder="e.g., 1:2 + 0.5:1, 1.5[+-0.01]" />
+                    <button id="interval-button">Evaluate</button>
                 </div>
                 <div class="example-output" id="interval-output"></div>
             </div>
-
             <div class="example-box">
                 <h3>Continued Fractions</h3>
+                <p class="example-note">Value, continued fraction, convergents and best approximation with denominator ≤ 100.</p>
                 <div class="example-input">
-                    <input type="text" id="cf-expr" value="3.~7~15~1"
-                        placeholder="e.g., 3.~7~15~1 for π approximation" />
-                    <button onclick="evaluateCF()">Evaluate</button>
+                    <input type="text" id="cf-expr" value="3.~7~15~1" placeholder="e.g., 3.~7~15~1, 314159/100000" />
+                    <button id="cf-button">Evaluate</button>
                 </div>
                 <div class="example-output" id="cf-output"></div>
+            </div>
+            <div class="example-box">
+                <h3>Bases</h3>
+                <p class="example-note">Base-prefixed input and the same value in bases 16, 2 and 7.</p>
+                <div class="example-input">
+                    <input type="text" id="bases-expr" value="0xff.8" placeholder="e.g., 0b0.#01, 0z[7]66, 1/3" />
+                    <button id="bases-button">Evaluate</button>
+                </div>
+                <div class="example-output" id="bases-output"></div>
             </div>
         </section>
 
         <section id="playground" class="section">
             <h2>Code Playground</h2>
             <p>
-                Try the RatMath API directly in your browser. Press
-                <kbd>Ctrl+Enter</kbd> (or <kbd>Cmd+Enter</kbd>) to run code:
+                Plain JavaScript with the Core API in scope (<code>R</code>, the classes,
+                <code>sum</code>, <code>product</code>, <code>seq</code>, <code>range</code>, parsers) plus
+                <code>show</code>, <code>hex</code>, <code>bin</code>, <code>inBase</code> and <code>sci</code> for
+                display. Press <kbd>Ctrl+Enter</kbd> (or <kbd>Cmd+Enter</kbd>) to run.
             </p>
 
             <div class="playground">
                 <div class="playground-editor">
-                    <textarea id="playground-code" rows="10">
-// Using RatMath template literals
-const { R, F, Parser } = RatMath;
+                    <textarea id="playground-code" rows="16">
+// Exact values from R (literals spelled as in RiX)
+const third = R`1/3`;
+console.log("1/3 + 1/6 =", R`${third} + 1/6`);
 
-// Exact fractions using expressions
-const sum = R`1/3 + 1/6`;
-console.log(`1/3 + 1/6 = ${sum}`);
-console.log(`Decimal: ${sum.toDecimal()}`);
+// Methods on the values
+const pi = R`355/113`;
+console.log("convergents:", pi.convergents());
+console.log("best with denominator <= 100:", pi.bestApproximation(100));
+console.log("in base 2:", third.toRepeatingBase(BaseSystem.fromBase(2)), "=", bin(third));
 
-// Or using method calls
-const a = R`1/3`;
-const b = R`1/6`;
-const sum2 = a.add(b);
-console.log(`Method call: ${a}.add(${b}) = ${sum2}`);
+// Sums, products and sequences
+console.log("sum of squares 1..10:", sum(1, 10, (i) => R`${i}^2`));
+console.log("harmonic H(4):", sum(1, 4, (i) => R`1/${i}`));
+console.log("5! =", product(1, 5, (j) => j));
+console.log("cubes:", seq(0, 6, 2, (k) => R`${k}^3`));
 
-// Interval arithmetic with range notation
-const iv1 = R`1.5[+-1.2]`;
-const iv2 = R`2.3[+5,-3]`;
-console.log(`Intervals: ${iv1.toRepeatingDecimal()}, ${iv2.toRepeatingDecimal()}, and their sum ${iv1.add(iv2).toRepeatingDecimal()}`);
-
-// Type promotion in expressions
-const result = R`42 / (7/3)`;
-console.log(`42 ÷ (7/3) = ${result} (${result.constructor.name})`);</textarea>
+// Intervals keep exact bounds
+const measured = R`5.2[+-0.05]`;
+console.log("area:", R`${measured}^2`, "≈", sci(R`${measured}^2`.high, 4));</textarea>
                 </div>
                 <div class="playground-controls">
-                    <button onclick="runPlayground()">Run Code</button>
-                    <button onclick="clearPlayground()">
-                        Clear Output
-                    </button>
+                    <button id="playground-run">Run Code</button>
+                    <button id="playground-clear">Clear Output</button>
                 </div>
                 <div class="playground-output" id="playground-output"></div>
             </div>
@@ -188,37 +183,38 @@ console.log(`42 ÷ (7/3) = ${result} (${result.constructor.name})`);</textarea>
             <div class="api-grid">
                 <div class="api-card">
                     <h3>Creating Numbers</h3>
-                    <pre><code>R\`1/2\`         // Rational
-R\`42\`          // Integer
-R\`1:2\`         // Interval
-F\`3/4\`         // Fraction (no reduction)</code></pre>
+                    <pre><code>R`42`, R`1/2`, R`1:2`
+R.base(16)`ff.8`
+new Rational(1, 3)
+new Integer(42n)
+parseNumber("0.#3")
+Rational.fromContinuedFraction([3, 7, 16])</code></pre>
                 </div>
 
                 <div class="api-card">
-                    <h3>Operations</h3>
-                    <pre><code>.add(other)
-.subtract(other)
-.multiply(other)
-.divide(other)
-.pow(n)</code></pre>
+                    <h3>Arithmetic and Lists</h3>
+                    <pre><code>.add  .subtract  .multiply  .divide
+.pow(n)  .negate()  .abs()  .reciprocal()
+sum(list)  sum(1, 10, i =&gt; …)
+product(…)  seq(…)  range(a, b, step)</code></pre>
                 </div>
 
                 <div class="api-card">
                     <h3>Comparisons</h3>
                     <pre><code>.equals(other)
-.lessThan(other)
-.greaterThan(other)
-.lessThanOrEqual(other)
-.greaterThanOrEqual(other)</code></pre>
+.compareTo(other)
+.lessThan(other)  .greaterThan(other)
+interval.contains(x)  .overlaps(y)</code></pre>
                 </div>
 
                 <div class="api-card">
                     <h3>Conversions</h3>
-                    <pre><code>.toString()
-.toDecimal(limit)
-.toMixed()
-.toContinuedFraction()
-.toScientific(precision)</code></pre>
+                    <pre><code>.toString()  .toMixedString()
+.toDecimal(n)  .toRepeatingDecimal()
+.toContinuedFractionString()
+.convergents()  .bestApproximation(n)
+.toBase(BaseSystem.fromBase(2))
+.toRepeatingBase(BaseSystem.fromBase(16))</code></pre>
                 </div>
             </div>
         </section>
@@ -240,29 +236,25 @@ F\`3/4\`         // Fraction (no reduction)</code></pre>
                 <div class="install-card">
                     <h3>Browser (ES Modules)</h3>
                     <pre><code>&lt;script type="module"&gt;
-  import { R, F } from './ratmath.js';
-  // Your code here
+  import { R, sum } from './ratmath.js';
+  console.log(String(R`1/3 + 1/6`));
 &lt;/script&gt;</code></pre>
                 </div>
             </div>
 
             <div class="usage-example">
                 <h3>Basic Usage</h3>
-                <pre><code>import { R, Parser } from '@ratmath/core';
+                <p><code>R</code>, <code>sum</code>, <code>product</code>, <code>seq</code> and <code>range</code>
+                    are in the next Core release after 0.6.0; this site uses that version.</p>
+                <pre><code>import { R, Rational, sum } from '@ratmath/core';
 
-// Using template literals with expressions
-const sum = R\`1/3 + 2/3\`;  // Rational(1)
+const total = R`1/3 + 2/3`;              // Integer 1
+const third = new Rational(1, 3);
+R`${third} * 3`.equals(total);           // true
+sum(1, 100, (i) =&gt; R`1/(${i}*(${i}+1))`); // 100/101
 
-// Or using method calls
-const third = R\`1/3\`;
-const twoThirds = R\`2/3\`;
-const sum2 = third.add(twoThirds);  // Rational(1)
-
-// Using Parser directly
-const expr = Parser.parse("1/2 + 1/3");  // Rational(5/6)
-
-// Working with intervals
-const measurement = R\`5.2[+-0.05]\`;  // [5.15, 5.25]</code></pre>
+const measurement = R`5.2[+-0.05]`;      // 5.15:5.25
+measurement.multiply(R`2`);              // 10.3:10.5</code></pre>
             </div>
         </section>
 

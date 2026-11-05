@@ -4,7 +4,7 @@
  */
 
 import { test, expect, beforeAll, afterAll } from "bun:test";
-import { Parser, Rational, RationalInterval } from "../index.js";
+import { R, Rational, RationalInterval } from "../index.js";
 
 let originalDocument;
 
@@ -120,7 +120,7 @@ test("IntervalVisualization - Complex Interval Parsing", () => {
   ];
   
   testCases.forEach(({ expr, expectedLow, expectedHigh }) => {
-    const interval = Parser.parse(expr);
+    const interval = R([expr]);
     viz.addInterval(interval, { label: expr });
     
     const added = viz.intervals[viz.intervals.length - 1];
@@ -134,7 +134,7 @@ test("IntervalVisualization - Range Auto-adjustment", () => {
   const viz = new IntervalVisualization(container);
   
   // Add interval and check auto-range
-  const interval = Parser.parse("2:5");
+  const interval = R(["2:5"]);
   viz.addInterval(interval);
   viz.updateRange();
   
@@ -143,7 +143,7 @@ test("IntervalVisualization - Range Auto-adjustment", () => {
   expect(viz.range.max.greaterThan(new Rational(5))).toBe(true);
   
   // Add another interval and check expansion
-  const interval2 = Parser.parse("7:10");
+  const interval2 = R(["7:10"]);
   viz.addInterval(interval2);
   viz.updateRange();
   
@@ -156,9 +156,9 @@ test("IntervalVisualization - Color Assignment", () => {
   const viz = new IntervalVisualization(container);
   
   // Test auto-color assignment
-  viz.addInterval(Parser.parse("1:2"), { label: "A" });
-  viz.addInterval(Parser.parse("3:4"), { label: "B" });
-  viz.addInterval(Parser.parse("5:6"), { label: "C" });
+  viz.addInterval(R(["1:2"]), { label: "A" });
+  viz.addInterval(R(["3:4"]), { label: "B" });
+  viz.addInterval(R(["5:6"]), { label: "C" });
   
   const colors = viz.intervals.map(iv => iv.color);
   
@@ -177,7 +177,7 @@ test("IntervalVisualization - SVG Export Basic Structure", () => {
   const container = createMockContainer();
   const viz = new IntervalVisualization(container);
   
-  viz.addInterval(Parser.parse("1:2"), { label: "Export Test" });
+  viz.addInterval(R(["1:2"]), { label: "Export Test" });
   
   const svgData = viz.exportSVG();
   
@@ -192,8 +192,8 @@ test("IntervalVisualization - Interval Operations", () => {
   const viz = new IntervalVisualization(container);
   
   // Test basic interval storage
-  const a = Parser.parse("1:3");
-  const b = Parser.parse("2:4");
+  const a = R(["1:3"]);
+  const b = R(["2:4"]);
   
   viz.addInterval(a, { label: "A", color: "#2563eb" });
   viz.addInterval(b, { label: "B", color: "#dc2626" });
@@ -233,7 +233,7 @@ test("IntervalVisualization - Mixed Number Display", () => {
   const viz = new IntervalVisualization(container);
   
   // Test mixed number formatting
-  const mixed = Parser.parse("3..1/4:5..3/4");
+  const mixed = R(["3..1/4:5..3/4"]);
   viz.addInterval(mixed, { label: "Mixed" });
   
   const stored = viz.intervals[0];

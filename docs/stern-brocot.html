@@ -54,7 +54,7 @@
 
                 <div class="expression-calculator">
                     <label for="expressionInput">Expression (using x):</label>
-                    <input type="text" id="expressionInput" placeholder="e.g., x^2, x^3, 5*x-3" />
+                    <input type="text" id="expressionInput" placeholder="e.g., x^2, x^3 - 2, 5*x - 3 (exact R expression)" />
                     <div class="info-item" style="margin-top: 0.5rem">
                         <label>Result:</label>
                         <span id="expressionResult">Enter an expression above</span>
@@ -67,21 +67,15 @@
                         <button class="display-mode-btn" data-mode="decimal"
                             title="Repeating decimals (e.g., 0.#3)">Decimal</button>
                         <button class="display-mode-btn" data-mode="scientific"
-                            title="Scientific notation (e.g., 2.333e0)">Scientific</button>
+                            title="Scientific notation in RiX spelling (e.g., 2.33333_^0…)">Scientific</button>
                         <button class="display-mode-btn" data-mode="cf"
                             title="Continued fractions (e.g., 2.~3)">CF</button>
-                    </div>
-                    <div class="precision-control" style="margin-top: 0.5rem">
-                        <label for="precisionInput" style="font-size: 0.85rem">Precision: 10^-</label>
-                        <input type="number" id="precisionInput" value="6" min="1" max="100" step="1"
-                            style="width: 60px; font-size: 0.85rem"
-                            title="Precision for transcendental functions (e.g., 6 means 10^-6)" />
                     </div>
                 </div>
 
                 <div class="jump-controls">
                     <label for="jumpInput">Jump to fraction:</label>
-                    <input type="text" id="jumpInput" placeholder="e.g., 3/4, 0.75, 1..2/3" />
+                    <input type="text" id="jumpInput" placeholder="e.g., 3/4, 0.75, 1..2/3, 0.#3, 3.~7~15" />
                     <button id="jumpBtn" class="nav-btn">Go</button>
 
                     <div class="constant-buttons">

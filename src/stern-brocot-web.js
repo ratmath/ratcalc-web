@@ -5,8 +5,27 @@
  * relationships between rational numbers in the infinite binary tree structure.
  */
 
-import { Fraction } from "@ratmath/core";
-import { Parser } from "@ratmath/parser";
+import { Fraction, R } from "@ratmath/core";
+import { formatScientific } from "ratcalc/session";
+
+/**
+ * Evaluate an R expression exactly, inserting value wherever x appears:
+ * "x^2 - 2" becomes R`${value}^2 - 2`.
+ */
+export function evaluateAt(expression, value) {
+  const pieces = expression.split(/\bx\b/);
+  return R(pieces, ...pieces.slice(1).map(() => value));
+}
+
+/** Read a jump target such as 3/4, 0.75, 1..2/3, 0.#3 or 3.~7~15 as a Fraction. */
+export function fractionFromInput(input) {
+  const value = R([input]);
+  const rational = value?.toRational ? value.toRational() : value;
+  if (!(rational?.numerator !== undefined && rational?.denominator !== undefined)) {
+    throw new Error("Enter a single exact number, not an interval");
+  }
+  return new Fraction(rational.numerator, rational.denominator).reduce();
+}
 
 class SternBrocotTreeVisualizer {
   constructor() {
@@ -32,7 +51,6 @@ class SternBrocotTreeVisualizer {
     // Get all DOM elements
     this.elements = {
       displayModeBtns: document.querySelectorAll('.display-mode-btn'),
-      precisionInput: document.getElementById("precisionInput"),
       currentFraction: document.getElementById("currentFraction"),
       currentDepth: document.getElementById("currentDepth"),
       currentPath: document.getElementById("currentPath"),
@@ -145,12 +163,6 @@ class SternBrocotTreeVisualizer {
     });
 
     // Precision input
-    this.elements.precisionInput.addEventListener('change', () => {
-      this.updateExpressionResult();
-    });
-    this.elements.precisionInput.addEventListener('input', () => {
-      this.updateExpressionResult();
-    });
 
     // Keyboard navigation
     document.addEventListener("keydown", (e) => this.handleKeyPress(e));
@@ -818,23 +830,8 @@ class SternBrocotTreeVisualizer {
         return;
       }
 
-      // Parse the input using the RatMath parser
-      const result = Parser.parse(input);
-      let fraction;
-
-      if (result.toRational) {
-        fraction = Fraction.fromRational(result.toRational());
-      } else if (
-        result.numerator !== undefined &&
-        result.denominator !== undefined
-      ) {
-        fraction = new Fraction(result.numerator, result.denominator);
-      } else {
-        throw new Error("Invalid input");
-      }
-
-      // Ensure the fraction is in lowest terms
-      fraction = fraction.reduce();
+      // Read the input as an exact R expression (3/4, 0.75, 1..2/3, 0.#3, 3.~7~15)
+      const fraction = fractionFromInput(input);
 
       this.elements.jumpInput.value = "";
       this.animateToNewFraction(fraction);
@@ -1642,16 +1639,8 @@ class SternBrocotTreeVisualizer {
         const targetRational = this.currentFraction.toRational();
         const exactDistance = targetRational.subtract(convergentRational).abs();
 
-        // Convert exact distance to scientific notation using the library
-        let distanceScientific;
-        try {
-          distanceScientific = exactDistance.toScientificNotation(3);
-        } catch (e) {
-          // Fallback to JavaScript conversion if library method fails
-          const distanceDecimal =
-            Number(exactDistance.numerator) / Number(exactDistance.denominator);
-          distanceScientific = distanceDecimal.toExponential(3);
-        }
+        // Exact distance in RiX-style scientific notation (… marks rounding)
+        const distanceScientific = formatScientific(exactDistance, 4);
 
         modalContent += `
                     <tr class="${isCurrent ? "current-row" : ""}">
@@ -1859,7 +1848,7 @@ class SternBrocotTreeVisualizer {
           const decimalInfo = rational.toRepeatingDecimalWithPeriod(true);
           return decimalInfo.decimal;
         case 'scientific':
-          return rational.toScientificNotation(6);
+          return formatScientific(rational, 6);
         case 'cf':
           const cf = rational.toContinuedFraction();
           if (cf.length === 1) return cf[0].toString();
@@ -1882,19 +1871,7 @@ class SternBrocotTreeVisualizer {
     }
 
     try {
-      // Replace 'x' with the current fraction value
-      const currentValueStr = this.currentFraction.toString();
-      const substitutedExpression = expression.replace(
-        /\bx\b/g,
-        `(${currentValueStr})`,
-      );
-
-      // Get precision from input (input is positive, convert to negative)
-      const precisionValue = parseInt(this.elements.precisionInput.value) || 6;
-      const precision = -precisionValue;
-
-      // Parse and evaluate the expression with precision
-      const result = Parser.parse(substitutedExpression, { precision: precision });
+      const result = evaluateAt(expression, this.currentFraction.toRational());
 
       // Convert result to a displayable format using the selected mode
       let resultText;
@@ -2091,7 +2068,9 @@ class SternBrocotTreeVisualizer {
 // Global variable for onclick handlers
 let sternBrocotApp;
 
-// Initialize the visualizer when the page loads
-document.addEventListener("DOMContentLoaded", () => {
-  sternBrocotApp = new SternBrocotTreeVisualizer();
-});
+// Initialize the visualizer when the page loads (not when imported by tests)
+if (typeof document !== "undefined") {
+  document.addEventListener("DOMContentLoaded", () => {
+    sternBrocotApp = new SternBrocotTreeVisualizer();
+  });
+}

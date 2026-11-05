@@ -1,8 +1,8 @@
 # RatWeb
 
 Web pages for [RatMath](../..): **RatCalc** (`docs/calc.html`), a JavaScript
-calculator with exact rational and interval arithmetic; the Stern-Brocot
-explorer; and the library showcase. `docs/` is the published site.
+calculator with exact rational and interval arithmetic; **RatTree**, the
+Stern-Brocot explorer; and the **showcase** of the Core JavaScript API. `docs/` is the published site.
 
 ## RatCalc
 
@@ -44,6 +44,21 @@ literals, and Core results are shown exactly.
 The look (gradient, card, monospace history, flush keypad) is the legacy
 RatCalc styling in `docs/calc.css`.
 
+## Showcase (`docs/showcase.html`)
+
+Demonstrates the Core JavaScript API: example boxes evaluate their text with
+`R` (basic arithmetic, repeating decimals, intervals with width/midpoint/
+shortest decimal, continued fractions with convergents and best
+approximation, bases), and a playground runs plain JavaScript with every Core
+export plus `show`, `hex`, `bin`, `inBase` and `sci` in scope.
+
+## RatTree (`docs/stern-brocot.html`)
+
+The Stern-Brocot explorer uses Core's `Fraction` tree methods. "Jump to
+fraction" and the "Expression (using x)" box read exact `R` expressions
+(`3.~7~15`, `0.#3`, `x^2 - 2`), with the current node inserted for `x`.
+Scientific display uses the RiX spelling (`2.33333_^0…`).
+
 ## Building and testing
 
 ```bash
@@ -59,6 +74,9 @@ RatCalc used to run the legacy calculator language (`@ratmath/algebra`'s
 JavaScript plus Core's `R` tag; the old commands are now functions (see
 above). Dropped: the comma interval form and `E` notation (RiX spells them
 `[a:b]` and `_^`), the multiplicative meaning of `**` (use `.mpow(n)`),
-`?load=` module URLs and optional packages (`reals`, `arith-funs`),
-multi-step expression-tree visualizations, and the legacy-grammar tests. The showcase and
-Stern-Brocot pages still use the legacy parser.
+`?load=` module URLs and the `reals.js`/`oracles.js` bundles, multi-step
+expression-tree visualizations, and the legacy-grammar tests. The showcase
+and RatTree no longer use the legacy parser (they used `Parser.parse` and the
+parser's `R`/`F`); webcalc now depends only on Core and the shared session.
+RatTree's precision box is gone: the legacy parser had no transcendental
+functions, so it never changed a result.

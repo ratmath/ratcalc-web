@@ -419,3 +419,12 @@ footer {
     flex-direction: column;
   }
 }
+.example-note {
+  margin: 0 0 0.5rem;
+  color: #555;
+  font-size: 0.9rem;
+}
+
+.example-output {
+  white-space: pre-wrap;
+}

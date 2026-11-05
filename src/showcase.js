@@ -1,213 +1,134 @@
-import {
-  Rational,
-  RationalInterval,
-  Fraction,
-  FractionInterval,
-  Integer,
-} from "@ratmath/core";
-import { Parser, R, F, parseRepeatingDecimal } from "@ratmath/parser";
+/**
+ * RatMath showcase: interactive examples and a playground for the Core
+ * JavaScript API — the R tag (RiX-spelled literals), the value classes and
+ * their methods, and sum/product/seq/range. Output uses the same formatting
+ * as RatCalc (apps/calc/src/session.js).
+ */
+import * as Core from "@ratmath/core";
+import { formatInBase, formatScientific, formatValue } from "ratcalc/session";
 
-// Store RatMath globally for playground
-window.RatMath = {
-  Parser,
-  R,
-  F,
-  Rational,
-  RationalInterval,
-  parseRepeatingDecimal,
-  Fraction,
-  FractionInterval,
-  Integer,
+const { R, Integer, Rational, RationalInterval } = Core;
+
+// Everything the playground can use by name.
+const { default: _defaultExport, ...namedExports } = Core;
+export const PLAYGROUND_SCOPE = {
+  ...namedExports,
+  show: (value) => formatValue(value),
+  hex: (value) => formatInBase(value, 16),
+  bin: (value) => formatInBase(value, 2),
+  inBase: formatInBase,
+  sci: formatScientific,
 };
 
-// Helper function to safely evaluate and display results
-function safeEvaluate(expression, outputId) {
-  const outputElement = document.getElementById(outputId);
-  try {
-    const result = Parser.parse(expression);
-    let output = result.toString();
+const typeName = (value) => value?.constructor?.name ?? typeof value;
 
-    // Add decimal representation if it's a fraction
-    if (result.toDecimal) {
-      const decimal = result.toDecimal(10);
-      output += ` = ${decimal}`;
+/** Lines describing an R expression's value, for each example box. */
+export const EXAMPLES = {
+  basic(value) {
+    return [`${formatValue(value)}   (${typeName(value)})`];
+  },
+  repeating(value) {
+    const lines = [`${formatValue(value)}   (${typeName(value)})`];
+    if (value instanceof Rational && value.denominator !== 1n) {
+      lines.push(`period: ${value.toRepeatingDecimalWithPeriod(true).period} digits`);
     }
+    return lines;
+  },
+  interval(value) {
+    if (!(value instanceof RationalInterval)) return [`${formatValue(value)}   (${typeName(value)})`];
+    return [
+      `${formatValue(value)}   (RationalInterval)`,
+      `width ${value.high.subtract(value.low)}, midpoint ${value.midpoint()}, shortest decimal inside ${value.shortestDecimal()}`,
+    ];
+  },
+  cf(value) {
+    const rational = value instanceof Integer ? value.toRational() : value;
+    if (!(rational instanceof Rational)) return [`${formatValue(value)}   (${typeName(value)})`];
+    return [
+      `${formatValue(rational)}`,
+      `.toContinuedFractionString()  ${rational.toContinuedFractionString()}`,
+      `.convergents()                ${rational.convergents().join(", ")}`,
+      `.bestApproximation(100)       ${rational.bestApproximation(100)}`,
+    ];
+  },
+  bases(value) {
+    const exact = value instanceof Integer ? value.toRational() : value;
+    if (!(exact instanceof Rational)) return [`${formatValue(value)}   (${typeName(value)})`];
+    return [
+      `${formatValue(exact)}`,
+      `hex  ${formatInBase(exact, 16)}`,
+      `bin  ${formatInBase(exact, 2)}`,
+      `base 7  ${formatInBase(exact, 7)}`,
+    ];
+  },
+};
 
-    // Add type information
-    output += ` (${result.constructor.name})`;
-
-    outputElement.textContent = output;
-    outputElement.style.color = "#28a745";
+/** Evaluate an example box's text with R and describe the result. */
+export function describeExample(kind, text) {
+  try {
+    return { ok: true, lines: EXAMPLES[kind](R([text])) };
   } catch (error) {
-    outputElement.textContent = `Error: ${error.message}`;
-    outputElement.style.color = "#dc3545";
+    return { ok: false, lines: [`Error: ${error.message}`] };
   }
 }
 
-// Basic arithmetic example
-window.evaluateBasic = function () {
-  const expr = document.getElementById("basic-expr").value;
-  safeEvaluate(expr, "basic-output");
-};
-
-// Repeating decimal example
-window.evaluateRepeating = function () {
-  const expr = document.getElementById("repeat-expr").value;
-  const outputElement = document.getElementById("repeat-output");
-
+/** Run playground code with the Core API in scope; returns its console lines. */
+export function runPlaygroundCode(code) {
+  const lines = [];
+  const format = (args) => args.map((arg) => (typeof arg === "string" ? arg : formatValue(arg))).join(" ");
+  const console = { log: (...args) => lines.push(format(args)), error: (...args) => lines.push(`Error: ${format(args)}`) };
+  const names = Object.keys(PLAYGROUND_SCOPE);
   try {
-    const result = Parser.parse(expr);
-    let output = result.toString();
-
-    // Show both fraction and decimal forms
-    if (result.toDecimal) {
-      const decimal = result.toDecimal(20);
-      output += ` = ${decimal}`;
-    }
-
-    // Show type information
-    output += ` (${result.constructor.name})`;
-
-    outputElement.textContent = output;
-    outputElement.style.color = "#28a745";
+    // eslint-disable-next-line no-new-func
+    new Function("console", ...names, code)(console, ...names.map((name) => PLAYGROUND_SCOPE[name]));
+    return { ok: true, lines };
   } catch (error) {
-    outputElement.textContent = `Error: ${error.message}`;
-    outputElement.style.color = "#dc3545";
+    lines.push(`Error: ${error.message}`);
+    return { ok: false, lines };
   }
-};
+}
 
-// Interval operations example
-window.evaluateInterval = function () {
-  const expr = document.getElementById("interval-expr").value;
-  const outputElement = document.getElementById("interval-output");
+function showExample(kind) {
+  const input = document.getElementById(`${kind}-expr`);
+  const output = document.getElementById(`${kind}-output`);
+  const result = describeExample(kind, input.value);
+  output.textContent = result.lines.join("\n");
+  output.style.color = result.ok ? "#28a745" : "#dc3545";
+}
 
-  try {
-    const result = Parser.parse(expr);
+function showPlayground() {
+  const output = document.getElementById("playground-output");
+  const result = runPlaygroundCode(document.getElementById("playground-code").value);
+  output.textContent = result.lines.join("\n") || "Code ran (no console.log output)";
+  output.style.color = result.ok ? "#abb2bf" : "#e06c75";
+}
 
-    let output = result.toString();
-
-    // For intervals, show the width
-    if (result.low && result.high) {
-      const width = result.high.subtract(result.low);
-      output += ` (width: ${width})`;
+if (typeof document !== "undefined" && typeof document.getElementById === "function" && document.getElementById("playground-code")) {
+  globalThis.RatMath = PLAYGROUND_SCOPE;
+  const kinds = Object.keys(EXAMPLES);
+  const start = () => {
+    for (const kind of kinds) {
+      showExample(kind);
+      document.getElementById(`${kind}-button`)?.addEventListener("click", () => showExample(kind));
+      document.getElementById(`${kind}-expr`).addEventListener("keydown", (event) => { if (event.key === "Enter") showExample(kind); });
     }
-
-    outputElement.textContent = output;
-    outputElement.style.color = "#28a745";
-  } catch (error) {
-    outputElement.textContent = `Error: ${error.message}`;
-    outputElement.style.color = "#dc3545";
-  }
-};
-
-// Continued fraction example
-window.evaluateCF = function () {
-  const expr = document.getElementById("cf-expr").value;
-  const outputElement = document.getElementById("cf-output");
-
-  try {
-    const result = Parser.parse(expr);
-    let output = result.toString();
-
-    // Show decimal approximation
-    if (result.toDecimal) {
-      const decimal = result.toDecimal(15);
-      output += ` ≈ ${decimal}`;
+    document.getElementById("playground-run").addEventListener("click", showPlayground);
+    document.getElementById("playground-clear").addEventListener("click", () => { document.getElementById("playground-output").textContent = ""; });
+    document.getElementById("playground-code").addEventListener("keydown", (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        event.preventDefault();
+        showPlayground();
+      }
+    });
+    for (const link of document.querySelectorAll(".nav-link")) {
+      link.addEventListener("click", (event) => {
+        const target = document.getElementById(link.getAttribute("href").slice(1));
+        if (!target) return;
+        event.preventDefault();
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
     }
-
-    // Show type information
-    output += ` (${result.constructor.name})`;
-
-    outputElement.textContent = output;
-    outputElement.style.color = "#28a745";
-  } catch (error) {
-    outputElement.textContent = `Error: ${error.message}`;
-    outputElement.style.color = "#dc3545";
-  }
-};
-
-// Playground functionality
-window.runPlayground = function () {
-  const code = document.getElementById("playground-code").value;
-  const outputElement = document.getElementById("playground-output");
-
-  // Clear previous output
-  outputElement.textContent = "";
-
-  // Create a custom console that captures output
-  const outputs = [];
-  const customConsole = {
-    log: (...args) => {
-      outputs.push(args.map((arg) => String(arg)).join(" "));
-    },
-    error: (...args) => {
-      outputs.push("Error: " + args.map((arg) => String(arg)).join(" "));
-    },
   };
-
-  try {
-    // Create a function with the code and run it with custom console
-    const func = new Function("console", "RatMath", code);
-    func(customConsole, window.RatMath);
-
-    // Display the output
-    outputElement.textContent =
-      outputs.join("\n") || "Code executed successfully (no output)";
-    outputElement.style.color = "#abb2bf";
-  } catch (error) {
-    outputElement.textContent = `Error: ${error.message}`;
-    outputElement.style.color = "#e06c75";
-  }
-};
-
-window.clearPlayground = function () {
-  document.getElementById("playground-output").textContent = "";
-};
-
-// Initialize examples on page load
-document.addEventListener("DOMContentLoaded", () => {
-  // Run initial examples
-  evaluateBasic();
-  evaluateRepeating();
-  evaluateInterval();
-  evaluateCF();
-
-  // Add Enter key support to all example inputs
-  document.getElementById("basic-expr").addEventListener("keypress", (e) => {
-    if (e.key === "Enter") evaluateBasic();
-  });
-
-  document.getElementById("repeat-expr").addEventListener("keypress", (e) => {
-    if (e.key === "Enter") evaluateRepeating();
-  });
-
-  document.getElementById("interval-expr").addEventListener("keypress", (e) => {
-    if (e.key === "Enter") evaluateInterval();
-  });
-
-  document.getElementById("cf-expr").addEventListener("keypress", (e) => {
-    if (e.key === "Enter") evaluateCF();
-  });
-
-  // Add Ctrl+Enter support for the playground
-  document
-    .getElementById("playground-code")
-    .addEventListener("keydown", (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-        e.preventDefault();
-        runPlayground();
-      }
-    });
-
-  // Add smooth scrolling for navigation links
-  document.querySelectorAll(".nav-link").forEach((link) => {
-    link.addEventListener("click", (e) => {
-      e.preventDefault();
-      const targetId = link.getAttribute("href").substring(1);
-      const targetElement = document.getElementById(targetId);
-      if (targetElement) {
-        targetElement.scrollIntoView({ behavior: "smooth", block: "start" });
-      }
-    });
-  });
-});
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);
+  else start();
+}

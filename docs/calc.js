@@ -5507,7 +5507,7 @@ function evaluate(strings, values, base) {
   const result = sum();
   if (position < tokens.length)
     throw new SyntaxError(`R: unexpected '${peek().value ?? peek().text}'`);
-  return result;
+  return result instanceof Rational && result.denominator === 1n ? new Integer(result.numerator) : result;
 }
 function R(strings, ...values) {
   return evaluate(strings, values, null);

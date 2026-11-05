@@ -5,7 +5,7 @@
 
 import { test, expect, beforeAll, afterAll } from "bun:test";
 import { IntervalVisualization, OperationVisualization, MultiStepVisualization } from "../src/IntervalVisualization.js";
-import { Parser, Rational, RationalInterval } from "../index.js";
+import { R, Rational, RationalInterval } from "../index.js";
 
 let originalDocument;
 
@@ -158,8 +158,8 @@ test("IntervalVisualization - Multiple Intervals with Auto-coloring", () => {
   const container = createMockContainer();
   const viz = new IntervalVisualization(container);
   
-  const interval1 = Parser.parse("1:2");
-  const interval2 = Parser.parse("2.5:3.5");
+  const interval1 = R(["1:2"]);
+  const interval2 = R(["2.5:3.5"]);
   
   viz.addInterval(interval1, { label: "A" });
   viz.addInterval(interval2, { label: "B" });
@@ -174,7 +174,7 @@ test("IntervalVisualization - Range Management", () => {
   const viz = new IntervalVisualization(container);
   
   // Test auto-range with single interval
-  const interval = Parser.parse("1:3");
+  const interval = R(["1:3"]);
   viz.addInterval(interval);
   viz.updateRange();
   
@@ -209,7 +209,7 @@ test("IntervalVisualization - SVG Export Structure", () => {
   const container = createMockContainer();
   const viz = new IntervalVisualization(container);
   
-  const interval = Parser.parse("1/2:3/2");
+  const interval = R(["1/2:3/2"]);
   viz.addInterval(interval, { label: "Export Test", draggable: true });
   
   const svgData = viz.exportSVG();
@@ -243,8 +243,8 @@ test("OperationVisualization - Two Operand Operation", () => {
   const container = createMockContainer();
   const viz = new OperationVisualization(container);
   
-  const interval1 = Parser.parse("1:2");
-  const interval2 = Parser.parse("1.5:2.5");
+  const interval1 = R(["1:2"]);
+  const interval2 = R(["1.5:2.5"]);
   const result = interval1.intersection(interval2);
   
   viz.visualizeOperation(interval1, interval2, 'intersection', result);
@@ -263,11 +263,11 @@ test("MultiStepVisualization - Expression Tree", async () => {
   const operationTree = {
     type: 'operation',
     operation: 'add',
-    left: { type: 'value', value: Parser.parse("1:2") },
-    right: { type: 'value', value: Parser.parse("0.5:1.5") }
+    left: { type: 'value', value: R(["1:2"]) },
+    right: { type: 'value', value: R(["0.5:1.5"]) }
   };
   
-  const result = Parser.parse("1.5:3.5");
+  const result = R(["1.5:3.5"]);
   
   viz.visualizeExpressionTree(operationTree, result);
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -282,7 +282,7 @@ test("IntervalVisualization - Mixed Number Intervals", () => {
   const viz = new IntervalVisualization(container);
   
   // Test mixed number interval parsing and display
-  const interval = Parser.parse("2..1/3:3..1/2");
+  const interval = R(["2..1/3:3..1/2"]);
   viz.addInterval(interval, { label: "Mixed Numbers" });
   
   expect(viz.intervals.length).toBe(1);
@@ -295,7 +295,7 @@ test("IntervalVisualization - Complex Fraction Intervals", () => {
   const viz = new IntervalVisualization(container);
   
   // Test complex fraction intervals like 1/2:3/4
-  const interval = Parser.parse("1/2:3/4");
+  const interval = R(["1/2:3/4"]);
   viz.addInterval(interval, { label: "Fractions" });
   
   expect(viz.intervals.length).toBe(1);
@@ -307,7 +307,7 @@ test("IntervalVisualization - Selection System", () => {
   const container = createMockContainer();
   const viz = new IntervalVisualization(container);
   
-  const interval = Parser.parse("1:2");
+  const interval = R(["1:2"]);
   const intervalId = viz.addInterval(interval, { draggable: true });
   
   // Mock the rendering to set up selectable elements
@@ -334,7 +334,7 @@ test("IntervalVisualization - Event Handling", () => {
     eventDetail = event.detail;
   });
   
-  const interval = Parser.parse("1:2");
+  const interval = R(["1:2"]);
   const intervalId = viz.addInterval(interval, { draggable: true });
   
   // Simulate interval change
@@ -388,7 +388,7 @@ test("IntervalVisualization - Accessibility Features", () => {
   const container = createMockContainer();
   const viz = new IntervalVisualization(container);
   
-  const interval = Parser.parse("1:2");
+  const interval = R(["1:2"]);
   viz.addInterval(interval, { draggable: true });
   
   // Mock render to set up accessibility
