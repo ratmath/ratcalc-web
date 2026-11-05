@@ -24,8 +24,15 @@ literals, and Core results are shown exactly.
 0.30000000000000004 (inexact JS number; R`…` keeps it exact)
 ```
 
-- `display("both" | "exact" | "decimal" | "mixed" | "cf")`, `digits(n)`,
-  `vars()`, `clear()`, `help()`, `ans`; click a result to reuse it as ``R`…` ``.
+- Literals inside ``R`…` `` use RiX's spelling: `3.~7~15~1`, `2.5_^-2` (no `E`),
+  `0xff.8`, `1.2[3:6]`; ``R.base(16)`ff.8` `` reads another base.
+- `sum`, `product`, `seq`, `range` replace the old `SUM`/`PROD`/`SEQ`.
+- `display("both" | "exact" | "decimal" | "mixed" | "cf" | "sci")`, `digits(n)`,
+  `sciDigits(n)`, an output base with `hex()`/`bin()`/`oct()`/`base(n)`/`dec()`,
+  one-value formatters `hex(x)`, `cf(x)`, `mix(x)`, `deci(x)`, `sci(x)`,
+  `inBase(x, n)`, and `help(x)` for a value's methods; `vars()`, `clear()`,
+  `help()`, `ans`; click a result to reuse it as ``R`…` ``. The full mapping
+  from old commands is in [`apps/calc`](../calc/README.md#from-the-old-calculator).
 - Interval results have a 📊 visualization (drag endpoints, export SVG/HTML).
 - The phone layout has a keypad with `R`, backtick and `${` keys and a command
   panel for the display modes.
@@ -49,8 +56,9 @@ bun run serve         # http://localhost:3000/calc.html
 
 RatCalc used to run the legacy calculator language (`@ratmath/algebra`'s
 `VariableManager` with `@ratmath/parser` and `@ratmath/stdlib`). It is now
-JavaScript plus Core's `R` tag. Dropped: the calculator syntax and its commands
-(`DECI`, `RAT`, `BOTH`, `SCI`, `CF`, `MIX`, `LIMIT`, base commands), `?load=`
-module URLs and optional packages (`reals`, `arith-funs`), multi-step
-expression-tree visualizations, and the legacy-grammar tests. The showcase and
+JavaScript plus Core's `R` tag; the old commands are now functions (see
+above). Dropped: the comma interval form and `E` notation (RiX spells them
+`[a:b]` and `_^`), the multiplicative meaning of `**` (use `.mpow(n)`),
+`?load=` module URLs and optional packages (`reals`, `arith-funs`),
+multi-step expression-tree visualizations, and the legacy-grammar tests. The showcase and
 Stern-Brocot pages still use the legacy parser.

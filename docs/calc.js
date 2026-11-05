@@ -58,6 +58,8 @@ __export(exports_core, {
   parseRational: () => parseRational,
   parseRepeatingDecimal: () => parseRepeatingDecimal,
   possibleRelations: () => possibleRelations,
+  product: () => product,
+  range: () => range,
   rangeAbsoluteValue: () => rangeAbsoluteValue,
   rangeAdd: () => rangeAdd,
   rangeDivide: () => rangeDivide,
@@ -66,7 +68,9 @@ __export(exports_core, {
   rangeNegate: () => rangeNegate,
   rangeReciprocal: () => rangeReciprocal,
   rangeSubtract: () => rangeSubtract,
-  reviveCoreValue: () => reviveCoreValue
+  reviveCoreValue: () => reviveCoreValue,
+  seq: () => seq,
+  sum: () => sum
 });
 
 // ../../packages/core/src/base-system.js
@@ -764,6 +768,17 @@ var convergentOptions = function(options, defaultLimit) {
   }
   return { maxCount, long, intermediates };
 };
+function positiveDenominatorBound(value) {
+  let bound = value;
+  if (typeof bound === "number" && Number.isSafeInteger(bound))
+    bound = BigInt(bound);
+  if (typeof bound?.value === "bigint" && bound.denominator === undefined)
+    bound = bound.value;
+  if (typeof bound !== "bigint" || bound < 1n) {
+    throw new Error("Maximum denominator must be a positive integer (bigint, safe integer or Integer)");
+  }
+  return bound;
+}
 function exactParts(other) {
   if (typeof other?.value === "bigint" && other.denominator === undefined) {
     return [other.value, 1n];
@@ -1928,9 +1943,7 @@ class Rational {
     return this.subtract(target).abs();
   }
   bestApproximation(maxDenominator) {
-    if (typeof maxDenominator !== "bigint" || maxDenominator < 1n) {
-      throw new Error("Maximum denominator must be a positive bigint");
-    }
+    maxDenominator = positiveDenominatorBound(maxDenominator);
     if (this.#denominator <= maxDenominator) {
       return new Rational(this.#numerator, this.#denominator);
     }
@@ -1974,9 +1987,7 @@ class Rational {
     return new Rational(negative ? -resultNumerator : resultNumerator, resultDenominator);
   }
   bestConvergent(maxDenominator) {
-    if (typeof maxDenominator !== "bigint" || maxDenominator < 1n) {
-      throw new Error("Maximum denominator must be a positive bigint");
-    }
+    maxDenominator = positiveDenominatorBound(maxDenominator);
     const negative = this.#numerator < 0n;
     let numerator = negative ? -this.#numerator : this.#numerator;
     let denominator = this.#denominator;
@@ -5318,8 +5329,69 @@ function parseInterval(input) {
 }
 
 // ../../packages/core/src/r-template.js
-var LITERAL = /^(?:\d[\d_]*\.\.\d[\d_]*\/\d[\d_]*|(?:\d[\d_]*)?\.?[\d_]*(?:\{\d+~\d+\}[\d_]*)*(?:#[\d_]*(?:\{\d+~\d+\}[\d_]*)*)?(?:\[[^\]]*\])?(?:\?[\d~]*)?)/;
-function tokenize(strings, values) {
+var LITERAL = /^(?:\d(?:_?\d)*\.\.\d(?:_?\d)*\/\d(?:_?\d)*|(?:\d(?:_?\d)*)?\.?(?:\d(?:_?\d)*)?(?:\{\d+~\d+\}(?:\d(?:_?\d)*)?)*(?:#(?:\d(?:_?\d)*)?(?:\{\d+~\d+\}(?:\d(?:_?\d)*)?)*)?(?:\[[^\]]*\])?(?:\?[\d~]*)?)/;
+var CONTINUED_FRACTION = /^(?:~-?)?\d(?:_?\d)*\.~\d(?:_?\d)*(?:~\d(?:_?\d)*)*(?:\?[\d~]*)?/;
+var PREFIXED = /^0(?:z\[(\d+)\]|([a-zA-Z]))([0-9a-zA-Z]+(?:\.[0-9a-zA-Z]*)?(?:#[0-9a-zA-Z]+)?|\.[0-9a-zA-Z]+(?:#[0-9a-zA-Z]+)?)/;
+var BASE_DIGITS = /^[0-9a-zA-Z]+(?:\.[0-9a-zA-Z]*)?(?:#[0-9a-zA-Z]+)?|^\.[0-9a-zA-Z]+(?:#[0-9a-zA-Z]+)?/;
+var RADIX_SHIFT = /^_\^(-?\d+)/;
+var OPERATORS = ["**", "!!", "+", "-", "*", "/", "^", ":", "(", ")", "!"];
+function readInBase(system, text) {
+  const digits = (part) => {
+    if (!part)
+      return 0n;
+    try {
+      return system.toDecimal(part);
+    } catch (error) {
+      if (part === part.toLowerCase())
+        throw error;
+      return system.toDecimal(part.toLowerCase());
+    }
+  };
+  const [body, repeat = ""] = text.split("#");
+  const [whole, fraction = ""] = body.split(".");
+  const radix = BigInt(system.base);
+  const fractionScale = radix ** BigInt(fraction.length);
+  let value = new Rational(digits(whole) * fractionScale + digits(fraction), fractionScale);
+  if (repeat) {
+    const repeatScale = radix ** BigInt(repeat.length) - 1n;
+    value = value.add(new Rational(digits(repeat), fractionScale * repeatScale));
+  }
+  return value.denominator === 1n ? new Integer(value.numerator) : value;
+}
+function prefixedSystem(match) {
+  if (match[1])
+    return BaseSystem.fromBase(Number(match[1]));
+  const system = BaseSystem.getSystemForPrefix(match[2]);
+  if (!system)
+    throw new SyntaxError(`R: unknown base prefix '0${match[2]}'`);
+  return system;
+}
+function shift(value, exponent) {
+  const power = new Rational(10).pow(BigInt(exponent));
+  const shifted = value.multiply(power);
+  return shifted instanceof Rational && shifted.denominator === 1n ? new Integer(shifted.numerator) : shifted;
+}
+function readLiteral(rest, base) {
+  const cf = rest.match(CONTINUED_FRACTION);
+  if (cf)
+    return { text: cf[0], value: parseNumber(cf[0]) };
+  const prefixed = rest.match(PREFIXED);
+  if (prefixed)
+    return { text: prefixed[0], value: readInBase(prefixedSystem(prefixed), prefixed[3]) };
+  if (base) {
+    const digits = rest.match(BASE_DIGITS)?.[0];
+    if (digits && digits !== ".")
+      return { text: digits, value: readInBase(base, digits) };
+    return null;
+  }
+  if (!/^[\d.]/.test(rest))
+    return null;
+  const literal = rest.match(LITERAL)[0];
+  if (!literal || literal === ".")
+    throw new SyntaxError(`R: unexpected '${rest[0]}'`);
+  return { text: literal, value: parseNumber(literal) };
+}
+function tokenize(strings, values, base) {
   const tokens = [];
   strings.forEach((text, part) => {
     let index = 0;
@@ -5330,17 +5402,19 @@ function tokenize(strings, values) {
         index += space[0].length;
         continue;
       }
-      if (/^[\d.]/.test(rest)) {
-        const literal = rest.match(LITERAL)[0];
-        if (!literal || literal === ".")
-          throw new SyntaxError(`R: unexpected '${rest[0]}'`);
-        tokens.push({ kind: "value", value: parseNumber(literal), text: literal });
-        index += literal.length;
+      const literal = readLiteral(rest, base);
+      if (literal) {
+        index += literal.text.length;
+        const radixShift = text.slice(index).match(RADIX_SHIFT);
+        if (radixShift)
+          index += radixShift[0].length;
+        tokens.push({ kind: "value", value: radixShift ? shift(literal.value, radixShift[1]) : literal.value, text: literal.text });
         continue;
       }
-      if ("+-*/^:()!".includes(rest[0])) {
-        tokens.push({ kind: "op", value: rest[0] });
-        index += 1;
+      const op = OPERATORS.find((candidate) => rest.startsWith(candidate));
+      if (op) {
+        tokens.push({ kind: "op", value: op });
+        index += op.length;
         continue;
       }
       throw new SyntaxError(`R: unexpected '${rest[0]}' in \`${strings.join("${…}")}\``);
@@ -5370,16 +5444,19 @@ function interval(left, right) {
     throw new TypeError("R: ':' joins two scalar endpoints");
   return new RationalInterval(low, high);
 }
-function power(base, exponent) {
+function power(base, exponent, op = "^") {
   if (!(exponent instanceof Integer))
-    throw new TypeError("R: '^' needs an Integer exponent (exact powers only)");
+    throw new TypeError(`R: '${op}' needs an Integer exponent (exact powers only)`);
   return base.pow(exponent.value);
 }
-function R(strings, ...values) {
-  const tokens = tokenize(strings, values);
+function evaluate(strings, values, base) {
+  const tokens = tokenize(strings, values, base);
   let position = 0;
   const peek = () => tokens[position];
-  const takeOp = (ops) => peek()?.kind === "op" && ops.includes(peek().value) ? tokens[position++].value : null;
+  const takeOp = (ops) => {
+    const list = Array.isArray(ops) ? ops : [ops];
+    return peek()?.kind === "op" && list.includes(peek().value) ? tokens[position++].value : null;
+  };
   function primary() {
     const token = tokens[position++];
     if (!token)
@@ -5396,23 +5473,24 @@ function R(strings, ...values) {
   }
   function postfix() {
     let value = primary();
-    while (takeOp("!") !== null) {
+    for (let op;(op = takeOp(["!!", "!"])) !== null; ) {
       if (!(value instanceof Integer))
-        throw new TypeError("R: '!' needs an Integer");
-      value = value.factorial();
+        throw new TypeError(`R: '${op}' needs an Integer`);
+      value = op === "!!" ? value.doubleFactorial() : value.factorial();
     }
     return value;
   }
   function exponent() {
     const base = postfix();
-    return takeOp("^") !== null ? power(base, unary()) : base;
+    const op = takeOp(["^", "**"]);
+    return op !== null ? power(base, unary(), op) : base;
   }
   function unary() {
     return takeOp("-") !== null ? unary().negate() : (takeOp("+"), exponent());
   }
   function product() {
     let value = unary();
-    for (let op;(op = takeOp("*/")) !== null; )
+    for (let op;(op = takeOp(["*", "/"])) !== null; )
       value = op === "*" ? value.multiply(unary()) : value.divide(unary());
     return value;
   }
@@ -5422,7 +5500,7 @@ function R(strings, ...values) {
   }
   function sum() {
     let value = range();
-    for (let op;(op = takeOp("+-")) !== null; )
+    for (let op;(op = takeOp(["+", "-"])) !== null; )
       value = op === "+" ? value.add(range()) : value.subtract(range());
     return value;
   }
@@ -5430,6 +5508,70 @@ function R(strings, ...values) {
   if (position < tokens.length)
     throw new SyntaxError(`R: unexpected '${peek().value ?? peek().text}'`);
   return result;
+}
+function R(strings, ...values) {
+  return evaluate(strings, values, null);
+}
+R.base = function base(radix) {
+  let system;
+  if (radix instanceof BaseSystem)
+    system = radix;
+  else if (typeof radix === "string")
+    system = new BaseSystem(radix);
+  else if (typeof radix === "number" || typeof radix === "bigint" || radix instanceof Integer) {
+    system = BaseSystem.fromBase(Number(radix instanceof Integer ? radix.value : radix));
+  } else {
+    throw new TypeError('R.base needs a radix, a BaseSystem or a string of digits such as "01234567"');
+  }
+  return (strings, ...values) => evaluate(strings, values, system);
+};
+
+// ../../packages/core/src/sequences.js
+var MAX_RANGE_LENGTH = 1e6;
+var simplify = (value) => value instanceof Rational && value.denominator === 1n ? new Integer(value.numerator) : value;
+function range(start, end, step = 1) {
+  const first = coreValue(start);
+  const last = coreValue(end);
+  const stride = coreValue(step);
+  const zero = new Integer(0);
+  if (stride.equals(zero))
+    throw new RangeError("range step cannot be zero");
+  const ascending = stride.greaterThan(zero);
+  const values = [];
+  for (let value = first;ascending ? !value.greaterThan(last) : !value.lessThan(last); value = value.add(stride)) {
+    if (values.length >= MAX_RANGE_LENGTH)
+      throw new RangeError(`range would exceed ${MAX_RANGE_LENGTH} values`);
+    values.push(simplify(value));
+  }
+  return values;
+}
+function terms(args, name) {
+  const fn = typeof args.at(-1) === "function" ? args.at(-1) : null;
+  const rest = fn ? args.slice(0, -1) : args;
+  if (rest.length === 1 && rest[0] != null && typeof rest[0][Symbol.iterator] === "function" && typeof rest[0] !== "string") {
+    return [[...rest[0]], fn];
+  }
+  if (rest.length === 2 || rest.length === 3)
+    return [range(...rest), fn];
+  throw new TypeError(`${name} takes a list, or start and end (and a step), optionally followed by a function`);
+}
+function seq(...args) {
+  const [values, fn] = terms(args, "seq");
+  return fn ? values.map((value, index) => fn(value, index)) : values;
+}
+function fold(args, name, identity, combine) {
+  const [values, fn] = terms(args, name);
+  let total = identity;
+  values.forEach((value, index) => {
+    total = combine(total, coreValue(fn ? fn(value, index) : value));
+  });
+  return simplify(total);
+}
+function sum(...args) {
+  return fold(args, "sum", new Integer(0), (total, value) => total.add(value));
+}
+function product(...args) {
+  return fold(args, "product", new Integer(1), (total, value) => total.multiply(value));
 }
 
 // ../../packages/core/src/core-values.js
@@ -5523,6 +5665,10 @@ var core_default = {
   parseRational,
   parseRepeatingDecimal,
   R,
+  product,
+  range,
+  seq,
+  sum,
   isBaseSystem,
   isCertifiedApproximation,
   isCoreNumber,
@@ -5563,7 +5709,7 @@ var BLOCKED = new Set([
   "opener",
   "frames"
 ]);
-var DISPLAY_MODES = ["both", "exact", "decimal", "mixed", "cf"];
+var DISPLAY_MODES = ["both", "exact", "decimal", "mixed", "cf", "sci"];
 function rewriteDeclarations(source) {
   let out = "";
   let depth = 0;
@@ -5715,8 +5861,61 @@ function repeating(rational, digits) {
     return null;
   }
 }
-function formatRational(value, mode, digits) {
+function baseSystemOf(base) {
+  const { BaseSystem: BaseSystem2 } = exports_core;
+  if (base instanceof BaseSystem2)
+    return base;
+  if (typeof base === "string")
+    return new BaseSystem2(base);
+  const radix = Number(base instanceof Integer2 ? base.value : base);
+  if (!Number.isSafeInteger(radix))
+    throw new TypeError("a base is a radix (2–62), a BaseSystem or a string of digits");
+  return BaseSystem2.fromBase(radix);
+}
+function formatInBase(value, base) {
+  const system = baseSystemOf(base);
+  if (value instanceof RationalInterval2)
+    return `${formatInBase(value.low, system)}:${formatInBase(value.high, system)}`;
+  const exact = value instanceof Integer2 ? value.toRational() : value;
+  if (!(exact instanceof Rational2))
+    throw new TypeError("base formatting needs an Integer, Rational or RationalInterval");
+  const prefix = BaseSystem.getPrefixForSystem(system);
+  const lead = prefix ? `0${prefix}` : `0z[${system.base}]`;
+  const negative = exact.numerator < 0n;
+  const digits = plainDecimal(exact.abs().toRepeatingBase(system));
+  return `${negative ? "-" : ""}${lead}${digits}`;
+}
+function formatScientific(value, significant = 10) {
+  const exact = value instanceof Integer2 ? value.toRational() : value;
+  if (exact instanceof RationalInterval2)
+    return `${formatScientific(exact.low, significant)}:${formatScientific(exact.high, significant)}`;
+  if (!(exact instanceof Rational2))
+    throw new TypeError("scientific formatting needs an Integer, Rational or RationalInterval");
+  if (exact.numerator === 0n)
+    return "0";
+  const negative = exact.numerator < 0n;
+  const magnitude = exact.abs();
+  const ten = new Rational2(10);
+  let exponent = magnitude.numerator.toString().length - magnitude.denominator.toString().length;
+  while (magnitude.lessThan(ten.pow(exponent)))
+    exponent -= 1;
+  while (!magnitude.lessThan(ten.pow(exponent + 1)))
+    exponent += 1;
+  const scaled = magnitude.divide(ten.pow(exponent - significant + 1));
+  let units = scaled.round("half-even");
+  if (units === 10n ** BigInt(significant)) {
+    units /= 10n;
+    exponent += 1;
+  }
+  const text = units.toString();
+  const mantissa = `${text[0]}${text.length > 1 ? `.${text.slice(1).replace(/0+$/, "")}` : ""}`.replace(/\.$/, "");
+  const rounded = !scaled.equals(new Rational2(units)) ? "…" : "";
+  return `${negative ? "-" : ""}${mantissa}${exponent === 0 ? "" : `_^${exponent}`}${rounded}`;
+}
+function formatRational(value, mode, digits, settings = {}) {
   const exact = value.toString();
+  if (mode === "sci")
+    return formatScientific(value, settings.sciDigits ?? 10);
   if (value.denominator === 1n)
     return exact;
   if (mode === "exact")
@@ -5731,11 +5930,20 @@ function formatRational(value, mode, digits) {
   return decimal === exact ? exact : `${exact} = ${decimal}`;
 }
 function formatValue(value, options = {}) {
-  const { mode = "both", digits = 30, depth = 0 } = options;
+  const { mode = "both", digits = 30, depth = 0, base = null } = options;
+  const numeric = value instanceof Rational2 || value instanceof Integer2 || value instanceof RationalInterval2;
+  if (numeric && base && depth === 0) {
+    const inner = formatValue(value, { ...options, base: null });
+    return `${formatInBase(value, base)} = ${inner}`;
+  }
+  if (numeric && base)
+    return formatInBase(value, base);
   if (value instanceof Rational2)
-    return formatRational(value, mode, digits);
+    return formatRational(value, mode, digits, options);
   if (value instanceof Integer2)
-    return value.toString();
+    return mode === "sci" ? formatScientific(value, options.sciDigits ?? 10) : value.toString();
+  if (value instanceof RationalInterval2 && mode === "sci")
+    return formatScientific(value, options.sciDigits ?? 10);
   if (value instanceof RationalInterval2) {
     const exact = `${value.low.toString()}:${value.high.toString()}`;
     if (mode === "exact" || value.low.denominator === 1n && value.high.denominator === 1n)
@@ -5763,7 +5971,7 @@ function formatValue(value, options = {}) {
     return String(value);
   if (depth > 3)
     return Array.isArray(value) ? "[…]" : "{…}";
-  const inner = { mode: mode === "both" ? "exact" : mode, digits, depth: depth + 1 };
+  const inner = { ...options, mode: mode === "both" ? "exact" : mode, digits, depth: depth + 1 };
   if (Array.isArray(value))
     return `[${value.map((item) => formatValue(item, inner)).join(", ")}]`;
   if (value instanceof Map)
@@ -5778,28 +5986,90 @@ function formatValue(value, options = {}) {
 var HELP_TEXT = `RatCalc is JavaScript with exact rational arithmetic.
 Type any JavaScript; the last expression's value is shown.
 
-  R\`1/3 + 1/6\`            exact arithmetic on Core literals -> 1/2
-  R\`1:2 + 3\`              intervals -> 4:5
-  x = R\`2/3\`; R\`\${x}^2\`  interpolated values stay exact -> 4/9
-  new Rational(1, 7)       Core classes: Integer, Rational, RationalInterval, ...
-  parseNumber("0.#142857") Core parsers: parseNumber, parseInterval, ...
-  [1, 2, 3].map(n => R\`1/\${n}\`)  plain JavaScript works around R
-  let total = R\`0\`         declarations persist between inputs
-  ans                      the previous result
+Exact values with R (literals are spelled as in RiX):
+  R\`1/3 + 1/6\`          -> 1/2          R\`1:2 + 3\`        -> 4:5 (interval)
+  R\`1..2/3\`  mixed       R\`0.#3\` repeating   R\`1.2[3:6]\`  R\`1.5[+-0.01]\`
+  R\`3.~7~15~1\` continued fraction -> 355/113    R\`2.5_^-2\` -> 1/40 (no E)
+  R\`0xff.8\`  R\`0b0.#01\`  R\`0z[7]66\`  base prefixes; R.base(16)\`ff.8\`
+  operators + - * / ^ ** ! !! :  and ( );  \${x} inserts a value exactly
 
-R literals: 3, -2, 1/2, 1..3/4, 0.#3, 1.23[56:67], 1_000, 1.5? ; operators + - * / ^ ! :
-Display: display("both" | "exact" | "decimal" | "mixed" | "cf"), digits(n)
-Commands: help(), vars(), clear()   (terminal: .help .vars .clear .exit)
+JavaScript around R:
+  let x = R\`2/3\`; R\`\${x}^2\`        declarations persist; ans = last result
+  F = (n) => R\`1/\${n}\`; F(7)       functions are JavaScript functions
+  sum(1, 10, i => R\`\${i}^2\`)  -> 385   product(1, 5, j => j) -> 120
+  seq(0, 6, 2, k => R\`\${k}^3\`)  range(0, 1, R\`1/4\`)  sum([R\`1/2\`, R\`1/3\`])
+
+Display (all results):  display("both" | "exact" | "decimal" | "mixed" | "cf" | "sci")
+  digits(n) decimal digits   sciDigits(n) significant digits
+  base(16) / hex() / bin() / oct() show results in a base too; dec() or base(10) to stop
+One value:  hex(x) bin(x) oct(x) inBase(x, 7) cf(x) mix(x) deci(x, 40) sci(x, 6)
+Methods:    help(x) lists what a value can do, e.g. help(R\`355/113\`)
+            x.convergents()  x.bestApproximation(100)  x.toContinuedFraction()
+Commands:   help() vars() clear()   (terminal: .help .vars .clear .exit)
 JavaScript numbers like 0.1 are inexact; results that are plain numbers say so.`;
+var METHOD_NOTES = {
+  Integer: [
+    ["add/subtract/multiply/divide(y)", "exact arithmetic (divide gives a Rational)"],
+    ["pow(n)", "R`2`.pow(10) -> 1024"],
+    ["factorial() / doubleFactorial()", "R`5`.factorial() -> 120"],
+    ["gcd(y) / lcm(y)", "R`12`.gcd(R`18`) -> 6"],
+    ["floorDivide(y) / floorModulo(y) / divmod(y)", "floor quotient and remainder"],
+    ["modulo(y)", "truncated remainder (sign of the dividend)"],
+    ["isEven() / isOdd() / sign() / abs()", ""],
+    ["toBase(BaseSystem.fromBase(2))", "digits in another base; or bin(x), hex(x)"],
+    ["toRational() / toNumber()", "conversions (toNumber is inexact)"]
+  ],
+  Rational: [
+    ["numerator / denominator", "bigint parts"],
+    ["add/subtract/multiply/divide(y), pow(n)", "exact arithmetic"],
+    ["toContinuedFraction() / toContinuedFractionString()", "R`355/113` -> [3, 7, 16] / 3.~7~16"],
+    ["convergents() / getConvergent(n)", "R`355/113`.convergents() -> [3, 22/7, 355/113]"],
+    ["bestApproximation(maxDen) / bestConvergent(maxDen)", "R`314159/100000`.bestApproximation(100) -> 311/99"],
+    ["approximationError(target)", "distance to another value"],
+    ["toRepeatingDecimal() / toDecimal(n)", "0.#142857 / truncated digits"],
+    ["toRepeatingBase(system) / toBase(system)", "other bases; or hex(x), inBase(x, 7)"],
+    ["toMixedString()", "R`22/7` -> 3..1/7"],
+    ["floor() / ceil() / round(mode) / roundTo(places)", "rounding (bigint results)"],
+    ["E(n)", "multiply by 10^n"],
+    ["reciprocal() / negate() / abs()", ""]
+  ],
+  RationalInterval: [
+    ["low / high", "endpoints"],
+    ["add/subtract/multiply/divide(y), pow(n), mpow(n)", "interval arithmetic; mpow multiplies copies"],
+    ["midpoint() / mediant()", "R`1:3`.midpoint() -> 2"],
+    ["shortestDecimal()", "R`1/3:1/2`.shortestDecimal() -> 2/5"],
+    ["contains(x) / containsValue(x) / overlaps(y)", "membership and overlap"],
+    ["intersection(y) / union(y)", ""],
+    ["relativeMidDecimalInterval() / compactedDecimalInterval()", "decimal interval text"],
+    ["toRepeatingDecimal() / toMixedString()", ""]
+  ]
+};
+function describeMethods(value) {
+  const type = value?.constructor?.name;
+  const notes = METHOD_NOTES[type];
+  const names = new Set;
+  for (let proto = Object.getPrototypeOf(value ?? {});proto && proto !== Object.prototype; proto = Object.getPrototypeOf(proto)) {
+    for (const name of Object.getOwnPropertyNames(proto)) {
+      if (name !== "constructor" && !name.startsWith("_") && typeof Object.getOwnPropertyDescriptor(proto, name)?.value === "function")
+        names.add(name);
+    }
+  }
+  const all = [...names].sort();
+  if (!notes)
+    return all.length ? `${type ?? typeof value} methods: ${all.join(", ")}` : `${formatValue(value)} has no methods`;
+  const width = Math.max(...notes.map(([name]) => name.length));
+  return [`${type} ${formatValue(value, { mode: "exact" })}`, ...notes.map(([name, note]) => `  .${name.padEnd(width)}  ${note}`), `All methods: ${all.join(", ")}`].join(`
+`);
+}
 function createSession(options = {}) {
-  const settings = { mode: "both", digits: 30 };
+  const settings = { mode: "both", digits: 30, sciDigits: 10, base: null };
   const variables = new Map;
   const blocked = new Set([...BLOCKED, ...options.blocked ?? []]);
   const actions = { clear: options.onClear ?? (() => {}) };
   const builtins = {
     ...exports_core,
     R,
-    help: () => HELP_TEXT,
+    help: (...args) => args.length ? describeMethods(args[0]) : HELP_TEXT,
     display(mode) {
       if (mode === undefined)
         return settings.mode;
@@ -5808,6 +6078,30 @@ function createSession(options = {}) {
       settings.mode = mode;
       return `display ${mode}`;
     },
+    sciDigits(n) {
+      if (n === undefined)
+        return settings.sciDigits;
+      if (!Number.isSafeInteger(n) || n < 1 || n > 1000)
+        throw new Error("sciDigits(n) needs a whole number from 1 to 1000");
+      settings.sciDigits = n;
+      return `sciDigits ${n}`;
+    },
+    base(radix) {
+      if (radix === undefined)
+        return settings.base ? `base ${settings.base.base}` : "base 10";
+      const system = baseSystemOf(radix);
+      settings.base = system.base === 10 && radix !== undefined && typeof radix !== "string" ? null : system;
+      return settings.base ? `base ${system.base}` : "base 10";
+    },
+    hex: (...args) => args.length ? formatInBase(args[0], 16) : builtins.base(16),
+    bin: (...args) => args.length ? formatInBase(args[0], 2) : builtins.base(2),
+    oct: (...args) => args.length ? formatInBase(args[0], 8) : builtins.base(8),
+    dec: (...args) => args.length ? formatValue(args[0], { ...settings, mode: "decimal", base: null }) : builtins.base(10),
+    inBase: (value, radix) => formatInBase(value, radix),
+    cf: (value) => (value instanceof Integer2 ? value.toRational() : value).toContinuedFractionString(),
+    mix: (value) => value.toMixedString(),
+    deci: (value, n = settings.digits) => formatValue(value, { ...settings, mode: "decimal", digits: n, base: null }),
+    sci: (value, n = settings.sciDigits) => formatScientific(value, n),
     digits(n) {
       if (n === undefined)
         return settings.digits;

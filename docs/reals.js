@@ -693,6 +693,17 @@ var convergentOptions = function(options, defaultLimit) {
   }
   return { maxCount, long, intermediates };
 };
+function positiveDenominatorBound(value) {
+  let bound = value;
+  if (typeof bound === "number" && Number.isSafeInteger(bound))
+    bound = BigInt(bound);
+  if (typeof bound?.value === "bigint" && bound.denominator === undefined)
+    bound = bound.value;
+  if (typeof bound !== "bigint" || bound < 1n) {
+    throw new Error("Maximum denominator must be a positive integer (bigint, safe integer or Integer)");
+  }
+  return bound;
+}
 function exactParts(other) {
   if (typeof other?.value === "bigint" && other.denominator === undefined) {
     return [other.value, 1n];
@@ -1857,9 +1868,7 @@ class Rational {
     return this.subtract(target).abs();
   }
   bestApproximation(maxDenominator) {
-    if (typeof maxDenominator !== "bigint" || maxDenominator < 1n) {
-      throw new Error("Maximum denominator must be a positive bigint");
-    }
+    maxDenominator = positiveDenominatorBound(maxDenominator);
     if (this.#denominator <= maxDenominator) {
       return new Rational(this.#numerator, this.#denominator);
     }
@@ -1903,9 +1912,7 @@ class Rational {
     return new Rational(negative ? -resultNumerator : resultNumerator, resultDenominator);
   }
   bestConvergent(maxDenominator) {
-    if (typeof maxDenominator !== "bigint" || maxDenominator < 1n) {
-      throw new Error("Maximum denominator must be a positive bigint");
-    }
+    maxDenominator = positiveDenominatorBound(maxDenominator);
     const negative = this.#numerator < 0n;
     let numerator = negative ? -this.#numerator : this.#numerator;
     let denominator = this.#denominator;

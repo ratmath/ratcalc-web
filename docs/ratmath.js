@@ -693,6 +693,17 @@ var convergentOptions = function(options, defaultLimit) {
   }
   return { maxCount, long, intermediates };
 };
+function positiveDenominatorBound(value) {
+  let bound = value;
+  if (typeof bound === "number" && Number.isSafeInteger(bound))
+    bound = BigInt(bound);
+  if (typeof bound?.value === "bigint" && bound.denominator === undefined)
+    bound = bound.value;
+  if (typeof bound !== "bigint" || bound < 1n) {
+    throw new Error("Maximum denominator must be a positive integer (bigint, safe integer or Integer)");
+  }
+  return bound;
+}
 function exactParts(other) {
   if (typeof other?.value === "bigint" && other.denominator === undefined) {
     return [other.value, 1n];
@@ -1857,9 +1868,7 @@ class Rational {
     return this.subtract(target).abs();
   }
   bestApproximation(maxDenominator) {
-    if (typeof maxDenominator !== "bigint" || maxDenominator < 1n) {
-      throw new Error("Maximum denominator must be a positive bigint");
-    }
+    maxDenominator = positiveDenominatorBound(maxDenominator);
     if (this.#denominator <= maxDenominator) {
       return new Rational(this.#numerator, this.#denominator);
     }
@@ -1903,9 +1912,7 @@ class Rational {
     return new Rational(negative ? -resultNumerator : resultNumerator, resultDenominator);
   }
   bestConvergent(maxDenominator) {
-    if (typeof maxDenominator !== "bigint" || maxDenominator < 1n) {
-      throw new Error("Maximum denominator must be a positive bigint");
-    }
+    maxDenominator = positiveDenominatorBound(maxDenominator);
     const negative = this.#numerator < 0n;
     let numerator = negative ? -this.#numerator : this.#numerator;
     let denominator = this.#denominator;
@@ -5217,6 +5224,9 @@ function parseDecimal(input) {
   }
   return parseDecimalValue(value);
 }
+function parseRepeatingDecimal(input) {
+  return parseDecimal(input);
+}
 function parseMixedNumber(input) {
   const value = inputString(input, "mixed number");
   if (!value.includes("..")) {
@@ -5241,6 +5251,252 @@ function parseInterval(input) {
   if (value instanceof CertifiedApproximation)
     return value.enclosure;
   return RationalInterval.point(value instanceof Integer ? value.toRational() : value);
+}
+
+// ../../packages/core/src/r-template.js
+var LITERAL = /^(?:\d(?:_?\d)*\.\.\d(?:_?\d)*\/\d(?:_?\d)*|(?:\d(?:_?\d)*)?\.?(?:\d(?:_?\d)*)?(?:\{\d+~\d+\}(?:\d(?:_?\d)*)?)*(?:#(?:\d(?:_?\d)*)?(?:\{\d+~\d+\}(?:\d(?:_?\d)*)?)*)?(?:\[[^\]]*\])?(?:\?[\d~]*)?)/;
+var CONTINUED_FRACTION = /^(?:~-?)?\d(?:_?\d)*\.~\d(?:_?\d)*(?:~\d(?:_?\d)*)*(?:\?[\d~]*)?/;
+var PREFIXED = /^0(?:z\[(\d+)\]|([a-zA-Z]))([0-9a-zA-Z]+(?:\.[0-9a-zA-Z]*)?(?:#[0-9a-zA-Z]+)?|\.[0-9a-zA-Z]+(?:#[0-9a-zA-Z]+)?)/;
+var BASE_DIGITS = /^[0-9a-zA-Z]+(?:\.[0-9a-zA-Z]*)?(?:#[0-9a-zA-Z]+)?|^\.[0-9a-zA-Z]+(?:#[0-9a-zA-Z]+)?/;
+var RADIX_SHIFT = /^_\^(-?\d+)/;
+var OPERATORS = ["**", "!!", "+", "-", "*", "/", "^", ":", "(", ")", "!"];
+function readInBase(system, text) {
+  const digits = (part) => {
+    if (!part)
+      return 0n;
+    try {
+      return system.toDecimal(part);
+    } catch (error) {
+      if (part === part.toLowerCase())
+        throw error;
+      return system.toDecimal(part.toLowerCase());
+    }
+  };
+  const [body, repeat = ""] = text.split("#");
+  const [whole, fraction = ""] = body.split(".");
+  const radix = BigInt(system.base);
+  const fractionScale = radix ** BigInt(fraction.length);
+  let value = new Rational(digits(whole) * fractionScale + digits(fraction), fractionScale);
+  if (repeat) {
+    const repeatScale = radix ** BigInt(repeat.length) - 1n;
+    value = value.add(new Rational(digits(repeat), fractionScale * repeatScale));
+  }
+  return value.denominator === 1n ? new Integer(value.numerator) : value;
+}
+function prefixedSystem(match) {
+  if (match[1])
+    return BaseSystem.fromBase(Number(match[1]));
+  const system = BaseSystem.getSystemForPrefix(match[2]);
+  if (!system)
+    throw new SyntaxError(`R: unknown base prefix '0${match[2]}'`);
+  return system;
+}
+function shift(value, exponent) {
+  const power = new Rational(10).pow(BigInt(exponent));
+  const shifted = value.multiply(power);
+  return shifted instanceof Rational && shifted.denominator === 1n ? new Integer(shifted.numerator) : shifted;
+}
+function readLiteral(rest, base) {
+  const cf = rest.match(CONTINUED_FRACTION);
+  if (cf)
+    return { text: cf[0], value: parseNumber(cf[0]) };
+  const prefixed = rest.match(PREFIXED);
+  if (prefixed)
+    return { text: prefixed[0], value: readInBase(prefixedSystem(prefixed), prefixed[3]) };
+  if (base) {
+    const digits = rest.match(BASE_DIGITS)?.[0];
+    if (digits && digits !== ".")
+      return { text: digits, value: readInBase(base, digits) };
+    return null;
+  }
+  if (!/^[\d.]/.test(rest))
+    return null;
+  const literal = rest.match(LITERAL)[0];
+  if (!literal || literal === ".")
+    throw new SyntaxError(`R: unexpected '${rest[0]}'`);
+  return { text: literal, value: parseNumber(literal) };
+}
+function tokenize(strings, values, base) {
+  const tokens = [];
+  strings.forEach((text, part) => {
+    let index = 0;
+    while (index < text.length) {
+      const rest = text.slice(index);
+      const space = rest.match(/^\s+/);
+      if (space) {
+        index += space[0].length;
+        continue;
+      }
+      const literal = readLiteral(rest, base);
+      if (literal) {
+        index += literal.text.length;
+        const radixShift = text.slice(index).match(RADIX_SHIFT);
+        if (radixShift)
+          index += radixShift[0].length;
+        tokens.push({ kind: "value", value: radixShift ? shift(literal.value, radixShift[1]) : literal.value, text: literal.text });
+        continue;
+      }
+      const op = OPERATORS.find((candidate) => rest.startsWith(candidate));
+      if (op) {
+        tokens.push({ kind: "op", value: op });
+        index += op.length;
+        continue;
+      }
+      throw new SyntaxError(`R: unexpected '${rest[0]}' in \`${strings.join("${…}")}\``);
+    }
+    if (part < values.length)
+      tokens.push({ kind: "value", value: coreValue(values[part]), text: `\${${part}}` });
+  });
+  return tokens;
+}
+function coreValue(value) {
+  if (value instanceof Integer || value instanceof Rational || value instanceof RationalInterval)
+    return value;
+  if (value?.isCertifiedApproximation === true)
+    return value;
+  if (typeof value === "bigint")
+    return new Integer(value);
+  if (typeof value === "number" && Number.isSafeInteger(value))
+    return new Integer(value);
+  if (typeof value === "string")
+    return parseNumber(value);
+  throw new TypeError(`R: cannot use ${typeof value === "number" ? `inexact number ${value}` : typeof value} as an exact value; pass a Core value, bigint, safe integer or literal string`);
+}
+var toRationalish = (value) => value instanceof Integer ? value.toRational() : value;
+function interval(left, right) {
+  const [low, high] = [toRationalish(left), toRationalish(right)];
+  if (!(low instanceof Rational) || !(high instanceof Rational))
+    throw new TypeError("R: ':' joins two scalar endpoints");
+  return new RationalInterval(low, high);
+}
+function power(base, exponent, op = "^") {
+  if (!(exponent instanceof Integer))
+    throw new TypeError(`R: '${op}' needs an Integer exponent (exact powers only)`);
+  return base.pow(exponent.value);
+}
+function evaluate(strings, values, base) {
+  const tokens = tokenize(strings, values, base);
+  let position = 0;
+  const peek = () => tokens[position];
+  const takeOp = (ops) => {
+    const list = Array.isArray(ops) ? ops : [ops];
+    return peek()?.kind === "op" && list.includes(peek().value) ? tokens[position++].value : null;
+  };
+  function primary() {
+    const token = tokens[position++];
+    if (!token)
+      throw new SyntaxError("R: expression ended early");
+    if (token.kind === "value")
+      return token.value;
+    if (token.value === "(") {
+      const value = sum();
+      if (takeOp(")") === null)
+        throw new SyntaxError("R: missing ')'");
+      return value;
+    }
+    throw new SyntaxError(`R: unexpected '${token.value}'`);
+  }
+  function postfix() {
+    let value = primary();
+    for (let op;(op = takeOp(["!!", "!"])) !== null; ) {
+      if (!(value instanceof Integer))
+        throw new TypeError(`R: '${op}' needs an Integer`);
+      value = op === "!!" ? value.doubleFactorial() : value.factorial();
+    }
+    return value;
+  }
+  function exponent() {
+    const base = postfix();
+    const op = takeOp(["^", "**"]);
+    return op !== null ? power(base, unary(), op) : base;
+  }
+  function unary() {
+    return takeOp("-") !== null ? unary().negate() : (takeOp("+"), exponent());
+  }
+  function product() {
+    let value = unary();
+    for (let op;(op = takeOp(["*", "/"])) !== null; )
+      value = op === "*" ? value.multiply(unary()) : value.divide(unary());
+    return value;
+  }
+  function range() {
+    const value = product();
+    return takeOp(":") !== null ? interval(value, product()) : value;
+  }
+  function sum() {
+    let value = range();
+    for (let op;(op = takeOp(["+", "-"])) !== null; )
+      value = op === "+" ? value.add(range()) : value.subtract(range());
+    return value;
+  }
+  const result = sum();
+  if (position < tokens.length)
+    throw new SyntaxError(`R: unexpected '${peek().value ?? peek().text}'`);
+  return result;
+}
+function R(strings, ...values) {
+  return evaluate(strings, values, null);
+}
+R.base = function base(radix) {
+  let system;
+  if (radix instanceof BaseSystem)
+    system = radix;
+  else if (typeof radix === "string")
+    system = new BaseSystem(radix);
+  else if (typeof radix === "number" || typeof radix === "bigint" || radix instanceof Integer) {
+    system = BaseSystem.fromBase(Number(radix instanceof Integer ? radix.value : radix));
+  } else {
+    throw new TypeError('R.base needs a radix, a BaseSystem or a string of digits such as "01234567"');
+  }
+  return (strings, ...values) => evaluate(strings, values, system);
+};
+
+// ../../packages/core/src/sequences.js
+var MAX_RANGE_LENGTH = 1e6;
+var simplify = (value) => value instanceof Rational && value.denominator === 1n ? new Integer(value.numerator) : value;
+function range(start, end, step = 1) {
+  const first = coreValue(start);
+  const last = coreValue(end);
+  const stride = coreValue(step);
+  const zero = new Integer(0);
+  if (stride.equals(zero))
+    throw new RangeError("range step cannot be zero");
+  const ascending = stride.greaterThan(zero);
+  const values = [];
+  for (let value = first;ascending ? !value.greaterThan(last) : !value.lessThan(last); value = value.add(stride)) {
+    if (values.length >= MAX_RANGE_LENGTH)
+      throw new RangeError(`range would exceed ${MAX_RANGE_LENGTH} values`);
+    values.push(simplify(value));
+  }
+  return values;
+}
+function terms(args, name) {
+  const fn = typeof args.at(-1) === "function" ? args.at(-1) : null;
+  const rest = fn ? args.slice(0, -1) : args;
+  if (rest.length === 1 && rest[0] != null && typeof rest[0][Symbol.iterator] === "function" && typeof rest[0] !== "string") {
+    return [[...rest[0]], fn];
+  }
+  if (rest.length === 2 || rest.length === 3)
+    return [range(...rest), fn];
+  throw new TypeError(`${name} takes a list, or start and end (and a step), optionally followed by a function`);
+}
+function seq(...args) {
+  const [values, fn] = terms(args, "seq");
+  return fn ? values.map((value, index) => fn(value, index)) : values;
+}
+function fold(args, name, identity, combine) {
+  const [values, fn] = terms(args, name);
+  let total = identity;
+  values.forEach((value, index) => {
+    total = combine(total, coreValue(fn ? fn(value, index) : value));
+  });
+  return simplify(total);
+}
+function sum(...args) {
+  return fold(args, "sum", new Integer(0), (total, value) => total.add(value));
+}
+function product(...args) {
+  return fold(args, "product", new Integer(1), (total, value) => total.multiply(value));
 }
 
 // ../../packages/core/src/core-values.js
@@ -7765,14 +8021,6 @@ class Parser {
     return [intPart, ...cfTerms];
   }
 }
-function R(strings, ...values) {
-  let input = "";
-  for (let i = 0;i < values.length; i++) {
-    input += strings[i] + values[i];
-  }
-  input += strings[strings.length - 1];
-  return Parser.parse(input, { typeAware: true });
-}
 function F(strings, ...values) {
   let input = "";
   for (let i = 0;i < values.length; i++) {
@@ -7839,8 +8087,10 @@ export {
   parseMixedNumber,
   parseNumber,
   parseRational,
-  parseRepeatingDecimal2 as parseRepeatingDecimal,
+  parseRepeatingDecimal,
   possibleRelations,
+  product,
+  range,
   rangeAbsoluteValue,
   rangeAdd,
   rangeDivide,
@@ -7849,5 +8099,7 @@ export {
   rangeNegate,
   rangeReciprocal,
   rangeSubtract,
-  reviveCoreValue
+  reviveCoreValue,
+  seq,
+  sum
 };

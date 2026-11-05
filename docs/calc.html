@@ -113,6 +113,11 @@
       <button class="command-btn" data-command='display("decimal")'>decimal</button>
       <button class="command-btn" data-command='display("mixed")'>mixed</button>
       <button class="command-btn" data-command='display("cf")'>cont. frac.</button>
+      <button class="command-btn" data-command='display("sci")'>sci</button>
+      <button class="command-btn" data-command="hex()">hex()</button>
+      <button class="command-btn" data-command="bin()">bin()</button>
+      <button class="command-btn" data-command="dec()">dec()</button>
+      <button class="command-btn" data-command="help(ans)">help(ans)</button>
       <button class="command-btn" data-command="ans">ans</button>
       <button class="command-btn" data-command="clear()">clear()</button>
     </div>
@@ -152,34 +157,77 @@
         <div class="help-section">
           <h3>JAVASCRIPT WITH EXACT ARITHMETIC</h3>
           <p>Input is JavaScript. The value of the last expression is shown; RatMath Core values are shown
-            exactly (fraction, repeating decimal, interval). Declarations persist between inputs.</p>
+            exactly (fraction, repeating decimal, interval). Declarations persist between inputs, and
+            <code>ans</code> is the previous result. Click a result to reuse it.</p>
           <ul>
             <li><code>R`1/3 + 1/6`</code> → <code>1/2 = 0.5</code></li>
             <li><code>R`1:2 + 3`</code> → <code>4:5</code> (intervals)</li>
             <li><code>let x = R`2/3`</code>, then <code>R`${x}^2`</code> → <code>4/9 = 0.#4</code></li>
-            <li><code>[1, 2, 3, 4].map(n =&gt; R`1/${n}`)</code> → <code>[1, 1/2, 1/3, 1/4]</code></li>
-            <li><code>new Rational(1, 7).toContinuedFractionString()</code> → <code>0.~7</code></li>
-            <li><code>ans</code> is the previous result; click a result to reuse it</li>
+            <li><code>P = (x, y) =&gt; R`${x}^2 - ${y}`</code>, then <code>P(3, 4)</code> → <code>5</code></li>
           </ul>
         </div>
 
         <div class="help-section">
-          <h3>INSIDE R`…`</h3>
+          <h3>NUMBERS INSIDE R`…` (RiX SPELLING)</h3>
           <ul>
-            <li>Numbers: <code>3</code>, <code>-2</code>, <code>3/4</code>, <code>1..2/3</code> (mixed), <code>0.#3</code> (repeating),
-              <code>1_000</code>, <code>1.23[56:67]</code> and <code>1.2[+-0.1]</code> (uncertainty), <code>1.5?</code> (certified prefix)</li>
-            <li>Operators: <code>+ - * /</code>, <code>^</code> (integer powers), <code>!</code>, <code>:</code> (interval), parentheses</li>
-            <li><code>${value}</code> inserts a Core value, bigint, whole number or literal string without losing exactness</li>
+            <li><code>3/4</code>, <code>1..2/3</code> (mixed), <code>0.#3</code> (repeating), <code>1_000</code>, <code>2:5</code> (interval)</li>
+            <li><code>1.2[3:6]</code> → 1.23:1.26, <code>1.5[+-0.01]</code> → 1.499:1.501 (uncertainty; RiX needs <code>:</code>)</li>
+            <li><code>3.~7~15~1</code> → 355/113 (continued fraction)</li>
+            <li><code>1_^3</code> → 1000, <code>2.5_^-2</code> → 1/40 (radix shift; there is no <code>E</code> notation)</li>
+            <li><code>0xff.8</code> → 511/2, <code>0b0.#01</code> → 1/3, <code>0z[7]66</code> → 48 (base prefixes);
+              <code>R.base(16)`ff.8 / 3`</code> reads plain digits in base 16</li>
+            <li>Operators: <code>+ - * /</code>, <code>^</code> and <code>**</code> (integer powers), <code>!</code>, <code>!!</code>,
+              <code>:</code> (interval), parentheses; <code>${value}</code> inserts a value exactly</li>
           </ul>
         </div>
 
         <div class="help-section">
-          <h3>IN SCOPE</h3>
+          <h3>SUMS, PRODUCTS AND SEQUENCES</h3>
           <ul>
-            <li>Core classes and parsers: <code>Integer</code>, <code>Rational</code>, <code>RationalInterval</code>,
-              <code>Fraction</code>, <code>parseNumber</code>, <code>parseInterval</code>, <code>BaseSystem</code>, …</li>
-            <li><code>display("both" | "exact" | "decimal" | "mixed" | "cf")</code>, <code>digits(n)</code></li>
-            <li><code>vars()</code>, <code>clear()</code>, <code>help()</code>, <code>show(value)</code></li>
+            <li><code>sum(1, 10, i =&gt; R`${i}^2`)</code> → <code>385</code> (was <code>SUM[i](i^2,1,10)</code>)</li>
+            <li><code>product(1, 5, j =&gt; j)</code> → <code>120</code>; <code>seq(0, 6, 2, k =&gt; R`${k}^3`)</code> → <code>[0, 8, 64, 216]</code></li>
+            <li><code>sum([R`1/2`, R`1/3`])</code> → <code>5/6</code>; <code>range(0, 1, R`1/4`)</code> → <code>[0, 1/4, 1/2, 3/4, 1]</code></li>
+          </ul>
+        </div>
+
+        <div class="help-section">
+          <h3>DISPLAY</h3>
+          <ul>
+            <li><code>display("both" | "exact" | "decimal" | "mixed" | "cf" | "sci")</code> for every result
+              (was DECI, RAT, BOTH, MIX, CF, SCI)</li>
+            <li><code>digits(n)</code> decimal digits, <code>sciDigits(n)</code> significant digits (was LIMIT, SCIPREC)</li>
+            <li>One value: <code>cf(x)</code>, <code>mix(x)</code>, <code>deci(x, 40)</code>, <code>sci(x, 6)</code> → e.g. <code>1.6667_^-1…</code></li>
+          </ul>
+        </div>
+
+        <div class="help-section">
+          <h3>BASES</h3>
+          <ul>
+            <li><code>hex()</code>, <code>bin()</code>, <code>oct()</code>, <code>base(7)</code>, <code>base("0123456789ab")</code>
+              also show every result in that base, e.g. <code>0xff = 255</code>; <code>dec()</code> stops</li>
+            <li>One value: <code>hex(R`255`)</code> → <code>0xff</code>, <code>bin(R`1/3`)</code> → <code>0b0.#01</code>,
+              <code>inBase(R`1:2`, 2)</code> → <code>0b1:0b10</code></li>
+            <li>Base text uses RiX prefixes, so <code>R`0x1.#5`</code> reads it back</li>
+          </ul>
+        </div>
+
+        <div class="help-section">
+          <h3>CONTINUED FRACTIONS AND APPROXIMATION</h3>
+          <ul>
+            <li><code>R`355/113`.toContinuedFraction()</code> → <code>[3, 7, 16]</code>; <code>cf(R`355/113`)</code> → <code>3.~7~16</code></li>
+            <li><code>R`355/113`.convergents()</code> → <code>[3, 22/7, 355/113]</code>; <code>getConvergent(n)</code></li>
+            <li><code>R`314159/100000`.bestApproximation(100)</code> → <code>311/99</code>; also <code>bestConvergent(n)</code></li>
+            <li><code>Rational.fromContinuedFraction([3, 7, 15, 1])</code> → <code>355/113</code></li>
+          </ul>
+        </div>
+
+        <div class="help-section">
+          <h3>WHAT A VALUE CAN DO</h3>
+          <ul>
+            <li><code>help(x)</code> lists a value's methods with examples, e.g. <code>help(R`355/113`)</code></li>
+            <li>Integer: <code>gcd</code>, <code>lcm</code>, <code>factorial</code>, <code>floorDivide</code>, <code>divmod</code>, <code>toBase</code>, …</li>
+            <li>Rational: <code>numerator</code>, <code>denominator</code>, <code>floor</code>, <code>round</code>, <code>toMixedString</code>, <code>toRepeatingBase</code>, …</li>
+            <li>Interval: <code>low</code>, <code>high</code>, <code>midpoint</code>, <code>mediant</code>, <code>shortestDecimal</code>, <code>mpow</code> (old <code>**</code>), …</li>
             <li>Plain JavaScript numbers such as <code>0.1 + 0.2</code> are inexact and are labelled as such</li>
             <li>No network access or imports: <code>fetch</code>, <code>import()</code> and similar are unavailable</li>
           </ul>
