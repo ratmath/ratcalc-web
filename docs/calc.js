@@ -18,6 +18,7 @@ var exports_core = {};
 __export(exports_core, {
   BaseSystem: () => BaseSystem,
   CertifiedApproximation: () => CertifiedApproximation,
+  ExactList: () => ExactList,
   Fraction: () => Fraction,
   FractionInterval: () => FractionInterval,
   Integer: () => Integer,
@@ -39,6 +40,7 @@ __export(exports_core, {
   certifiedRadixPrefix: () => certifiedRadixPrefix,
   checkRangeOperationResult: () => checkRangeOperationResult,
   default: () => core_default,
+  exact: () => exact2,
   isBaseSystem: () => isBaseSystem,
   isCertifiedApproximation: () => isCertifiedApproximation,
   isCoreNumber: () => isCoreNumber,
@@ -5526,9 +5528,83 @@ R.base = function base(radix) {
   return (strings, ...values) => evaluate(strings, values, system);
 };
 
+// ../../packages/core/src/exact-list.js
+var simplify = (value) => value instanceof Rational && value.denominator === 1n ? new Integer(value.numerator) : value;
+
+class ExactList extends Array {
+  sum(fn) {
+    let total = new Integer(0);
+    this.forEach((value, index) => {
+      total = total.add(coreValue(fn ? fn(value, index) : value));
+    });
+    return simplify(total);
+  }
+  product(fn) {
+    let total = new Integer(1);
+    this.forEach((value, index) => {
+      total = total.multiply(coreValue(fn ? fn(value, index) : value));
+    });
+    return simplify(total);
+  }
+  #elementwise(operation, other) {
+    if (Array.isArray(other)) {
+      if (other.length !== this.length) {
+        throw new RangeError(`${operation} needs lists of the same length (${this.length} and ${other.length})`);
+      }
+      return this.map((value, index) => simplify(coreValue(value)[operation](coreValue(other[index]))));
+    }
+    const operand = coreValue(other);
+    return this.map((value) => simplify(coreValue(value)[operation](operand)));
+  }
+  add(other) {
+    return this.#elementwise("add", other);
+  }
+  subtract(other) {
+    return this.#elementwise("subtract", other);
+  }
+  multiply(other) {
+    return this.#elementwise("multiply", other);
+  }
+  divide(other) {
+    return this.#elementwise("divide", other);
+  }
+  pow(exponent) {
+    const power = coreValue(exponent);
+    if (!(power instanceof Integer))
+      throw new TypeError("pow needs an Integer exponent");
+    return this.map((value) => simplify(coreValue(value).pow(power.value)));
+  }
+  min() {
+    return this.#extreme((candidate, best) => candidate.lessThan(best), "min");
+  }
+  max() {
+    return this.#extreme((candidate, best) => candidate.greaterThan(best), "max");
+  }
+  #extreme(better, name) {
+    if (this.length === 0)
+      throw new RangeError(`${name} of an empty list`);
+    let best = coreValue(this[0]);
+    for (const value of this.slice(1)) {
+      const candidate = coreValue(value);
+      if (better(candidate, best))
+        best = candidate;
+    }
+    return best;
+  }
+  toString() {
+    return `[${Array.prototype.map.call(this, String).join(", ")}]`;
+  }
+}
+function exact2(values) {
+  if (values == null || typeof values[Symbol.iterator] !== "function" || typeof values === "string") {
+    throw new TypeError("exact needs a list (array or other iterable) of exact values");
+  }
+  return ExactList.from(values, (value) => coreValue(value));
+}
+
 // ../../packages/core/src/sequences.js
 var MAX_RANGE_LENGTH = 1e6;
-var simplify = (value) => value instanceof Rational && value.denominator === 1n ? new Integer(value.numerator) : value;
+var simplify2 = (value) => value instanceof Rational && value.denominator === 1n ? new Integer(value.numerator) : value;
 function range(start, end, step = 1) {
   const first = coreValue(start);
   const last = coreValue(end);
@@ -5537,11 +5613,11 @@ function range(start, end, step = 1) {
   if (stride.equals(zero))
     throw new RangeError("range step cannot be zero");
   const ascending = stride.greaterThan(zero);
-  const values = [];
+  const values = new ExactList;
   for (let value = first;ascending ? !value.greaterThan(last) : !value.lessThan(last); value = value.add(stride)) {
     if (values.length >= MAX_RANGE_LENGTH)
       throw new RangeError(`range would exceed ${MAX_RANGE_LENGTH} values`);
-    values.push(simplify(value));
+    values.push(simplify2(value));
   }
   return values;
 }
@@ -5549,7 +5625,7 @@ function terms(args, name) {
   const fn = typeof args.at(-1) === "function" ? args.at(-1) : null;
   const rest = fn ? args.slice(0, -1) : args;
   if (rest.length === 1 && rest[0] != null && typeof rest[0][Symbol.iterator] === "function" && typeof rest[0] !== "string") {
-    return [[...rest[0]], fn];
+    return [ExactList.from(rest[0]), fn];
   }
   if (rest.length === 2 || rest.length === 3)
     return [range(...rest), fn];
@@ -5565,7 +5641,7 @@ function fold(args, name, identity, combine) {
   values.forEach((value, index) => {
     total = combine(total, coreValue(fn ? fn(value, index) : value));
   });
-  return simplify(total);
+  return simplify2(total);
 }
 function sum(...args) {
   return fold(args, "sum", new Integer(0), (total, value) => total.add(value));
@@ -5665,6 +5741,8 @@ var core_default = {
   parseRational,
   parseRepeatingDecimal,
   R,
+  ExactList,
+  exact: exact2,
   product,
   range,
   seq,
@@ -5998,6 +6076,8 @@ JavaScript around R:
   F = (n) => R\`1/\${n}\`; F(7)       functions are JavaScript functions
   sum(1, 10, i => R\`\${i}^2\`)  -> 385   product(1, 5, j => j) -> 120
   seq(0, 6, 2, k => R\`\${k}^3\`)  range(0, 1, R\`1/4\`)  sum([R\`1/2\`, R\`1/3\`])
+  xs = range(1, 4); xs.sum() -> 10; xs.multiply(R\`1/2\`) -> [1/2, 1, 3/2, 2]
+  xs.pow(-1).sum() -> 25/12; xs.filter(x => x.isEven()); exact(["1/2", 3]).max()
 
 Display (all results):  display("both" | "exact" | "decimal" | "mixed" | "cf" | "sci")
   digits(n) decimal digits   sciDigits(n) significant digits
@@ -6008,6 +6088,13 @@ Methods:    help(x) lists what a value can do, e.g. help(R\`355/113\`)
 Commands:   help() vars() clear()   (terminal: .help .vars .clear .exit)
 JavaScript numbers like 0.1 are inexact; results that are plain numbers say so.`;
 var METHOD_NOTES = {
+  ExactList: [
+    ["sum(fn?) / product(fn?)", "range(1, 4).sum() -> 10, .product() -> 24"],
+    ["add/subtract/multiply/divide(c)", "range(1, 4).multiply(R`1/2`) -> [1/2, 1, 3/2, 2]; c may be a same-length list"],
+    ["pow(n)", "range(1, 4).pow(-1) -> [1, 1/2, 1/3, 1/4]"],
+    ["min() / max()", 'exact(["1/2", -3]).min() -> -3'],
+    ["map/filter/slice/reduce/...", "every Array method; map, filter and slice keep ExactList"]
+  ],
   Integer: [
     ["add/subtract/multiply/divide(y)", "exact arithmetic (divide gives a Rational)"],
     ["pow(n)", "R`2`.pow(10) -> 1024"],
