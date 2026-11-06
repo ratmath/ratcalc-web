@@ -6,7 +6,7 @@
 import { PRESETS, applyFunction, nameProblem, nextName, termCount } from "./named-functions.js";
 
 const STORAGE_KEY = "ratree.functions.v1";
-const FIELDS = ["formula", "term", "terms", "error", "domain"];
+const FIELDS = ["formula", "term", "terms", "error", "domain", "errorMode", "bound", "order"];
 
 function plainDefinition(definition) {
   const { name, kind, note } = definition;
@@ -100,7 +100,8 @@ export class FunctionsPanel {
       if (value === "formula" && definition.formula === undefined) definition.formula = "x";
       if (value === "taylor" && definition.term === undefined) Object.assign(definition, { term: "x^n/n!", terms: "10", error: "", domain: "" });
     }
-    this.changed(field === "kind");
+    if (field === "errorMode" && value === "lagrange" && definition.bound === undefined) Object.assign(definition, { bound: "1", order: "n+1" });
+    this.changed(field === "kind" || field === "errorMode");
   }
 
   changed(rerender = true) {
@@ -196,7 +197,22 @@ export class FunctionsPanel {
     } else {
       card.append(this.field(definition, "term", "term(x, n) =", "x^n/n!"));
       card.append(this.field(definition, "terms", "N =", "10 or 5*d"));
-      card.append(this.field(definition, "error", "error(x, n=N) =", "bound on the remainder (blank: none)"));
+      const modes = this.element("div", "fn-kinds fn-modes");
+      for (const [mode, label] of [["explicit", "Error formula"], ["lagrange", "Lagrange"]]) {
+        const active = (definition.errorMode ?? "explicit") === mode;
+        const button = this.element("button", `fn-kind${active ? " active" : ""}`, label);
+        button.type = "button";
+        button.title = mode === "lagrange" ? "Remainder ≤ M·|x|^k/k! with M bounding |f^(k)| between 0 and x" : "Write the remainder bound directly";
+        button.addEventListener("click", () => { if (!active) this.update(definition.name, "errorMode", mode); });
+        modes.append(button);
+      }
+      card.append(modes);
+      if (definition.errorMode === "lagrange") {
+        card.append(this.field(definition, "bound", "|f^(k)| ≤ M(x, n) =", "e.g. 1 or 3^CEIL(ABS(x))"));
+        card.append(this.field(definition, "order", "k =", "n+1"));
+      } else {
+        card.append(this.field(definition, "error", "error(x, n=N) =", "bound on the remainder (blank: none)"));
+      }
       card.append(this.field(definition, "domain", "domain", "all x, or an interval like -1:1"));
     }
     if (definition.note) card.append(this.element("div", "fn-note", definition.note));

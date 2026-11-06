@@ -103,6 +103,25 @@ describe("Taylor functions", () => {
     expect(() => termCount({ terms: String(MAX_TERMS + 1) }, at(R`1`))).toThrow("limited");
   });
 
+  test("Lagrange mode: M · |x|^k / k!", () => {
+    const exp = { kind: "taylor", term: "x^n/n!", terms: "4", errorMode: "lagrange", bound: "3", order: "" };
+    const value = applyFunction(exp, R`1`, at(R`1`));
+    // sum to n = 4 is 65/24; remainder ≤ 3 · 1^5 / 5! = 1/40
+    const sum = new Rational(65, 24);
+    const tail = new Rational(1, 40);
+    expect(value.low.equals(sum.subtract(tail)) && value.high.equals(sum.add(tail))).toBe(true);
+    // an interval argument uses max |x| = 1/2
+    const half = applyFunction({ ...exp, bound: "3^CEIL(ABS(x))" }, R`-1/2:1/2`, at(R`1`));
+    expect(encloses(half, "1.648721270700128146848650787814")).toBe(true);
+    const sine = { ...presets.SIN, terms: "3" };
+    const s = applyFunction(sine, R`1/2`, at(R`1/2`));
+    const width = s.high.subtract(s.low);
+    expect(width.equals(new Rational(2n, 2n ** 9n * 362880n))).toBe(true); // 2 · (1/2)^9 / 9!
+    expect(() => applyFunction({ ...exp, bound: "" }, R`1`, at(R`1`))).toThrow("needs a derivative bound");
+    expect(() => applyFunction({ ...exp, order: "0" }, R`1`, at(R`1`))).toThrow("whole number ≥ 1");
+    expect(() => applyFunction({ ...exp, order: "1/2" }, R`1`, at(R`1`))).toThrow("whole number ≥ 1");
+  });
+
   test("an exact series with no error term returns the exact sum", () => {
     const poly = { kind: "taylor", term: "x^n", terms: "3", error: "" };
     expect(String(applyFunction(poly, R`2`, at(R`2`)))).toBe("15");

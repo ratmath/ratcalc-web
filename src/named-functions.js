@@ -13,7 +13,8 @@
  *   - a formula: { kind: "formula", formula: "x^2 - 2" }, or
  *   - a Taylor polynomial: { kind: "taylor", term, terms, error, domain }:
  *     the value is S = sum of term(x, n) for n = 0..N plus an error interval
- *     [-E, E], where E is the upper bound of |error(x, n)| evaluated with n = N.
+ *     [-E, E]: E is |error(x, n)| at n = N (explicit mode), or in Lagrange mode
+ *     M · |x|^k / k! from a derivative bound M = bound(x, n) and order k.
  *     N comes from `terms`, a whole number or a formula in d ("5*d").
  *     `domain` (an R interval such as "-1:1", optional) is where the error
  *     bound is valid; x (or every point of an interval x) must lie in it.
@@ -241,12 +242,35 @@ export function applyFunction(definition, argument, context) {
   for (let n = 0; n <= last; n++) {
     total = total.add(evaluateExpression(definition.term, { ...inner, vars: { ...vars, x: seriesX, n: new Integer(n) } }));
   }
-  const errorText = String(definition.error ?? "").trim();
-  if (!errorText) return simplify(total);
-  const error = evaluateExpression(errorText, { ...inner, vars: { ...vars, n: new Integer(last) } });
-  const bound = magnitude(error);
+  const bound = remainderBound(definition, argument, last, inner, vars);
+  if (bound === null) return simplify(total);
   if (bound.equals(Rational.zero)) return simplify(total);
   return simplify(total.add(new RationalInterval(bound.negate(), bound)));
+}
+
+/**
+ * Upper bound on the remainder, or null for none.
+ *  - explicit (default): |error(x, n)| at n = N.
+ *  - lagrange: Taylor's theorem, |R| ≤ M · |x|^k / k!, where M = bound(x, n)
+ *    bounds |f^(k)| between 0 and x, and k = order(n) (default n + 1) is the
+ *    derivative order after the last nonzero power used (2n + 3 for sin's odd
+ *    series, 2n + 2 for cos).
+ */
+function remainderBound(definition, argument, last, inner, vars) {
+  const atLast = { ...inner, vars: { ...vars, n: new Integer(last) } };
+  if (definition.errorMode === "lagrange") {
+    const boundText = String(definition.bound ?? "").trim();
+    if (!boundText) throw new SyntaxError("Lagrange mode needs a derivative bound M(x, n)");
+    const order = evaluateExpression(String(definition.order ?? "").trim() || "n+1", atLast);
+    if (!(order instanceof Integer) || order.value < 1n) throw new TypeError(`the derivative order k must be a whole number ≥ 1 (got ${order})`);
+    const derivativeBound = magnitude(evaluateExpression(boundText, atLast));
+    let factorial = 1n;
+    for (let i = 2n; i <= order.value; i++) factorial *= i;
+    return derivativeBound.multiply(magnitude(argument).pow(order.value)).divide(new Rational(factorial));
+  }
+  const errorText = String(definition.error ?? "").trim();
+  if (!errorText) return null;
+  return magnitude(evaluateExpression(errorText, atLast));
 }
 
 /** First unused name: A, B, ... Z, then A1, B1, ... */
@@ -277,15 +301,14 @@ export function nameProblem(name, used) {
 
 /**
  * Common functions with conservative remainder bounds (n = N, the last term).
- *  - EXP: e^|x| ≤ 3^ceil|x|, Lagrange remainder.
- *  - SIN, COS: Lagrange remainder with |derivatives| ≤ 1.
+ *  - EXP, SIN, COS: Lagrange mode (|e^ξ| ≤ 3^ceil|x|; |sin^(k)|, |cos^(k)| ≤ 1).
  *  - LN1P, GEOM, SQRT1P: geometric tail bound, |x| < 1.
  *  - ATAN: alternating series with decreasing terms, |x| ≤ 1.
  */
 export const PRESETS = [
-  { name: "EXP", label: "eˣ", kind: "taylor", term: "x^n/n!", terms: "10", error: "3^CEIL(ABS(x)) * ABS(x)^(n+1)/(n+1)!", domain: "", note: "all x; e^|x| ≤ 3^⌈|x|⌉" },
-  { name: "SIN", label: "sin x", kind: "taylor", term: "(-1)^n * x^(2*n+1)/(2*n+1)!", terms: "8", error: "ABS(x)^(2*n+3)/(2*n+3)!", domain: "", note: "all x" },
-  { name: "COS", label: "cos x", kind: "taylor", term: "(-1)^n * x^(2*n)/(2*n)!", terms: "8", error: "ABS(x)^(2*n+2)/(2*n+2)!", domain: "", note: "all x" },
+  { name: "EXP", label: "eˣ", kind: "taylor", term: "x^n/n!", terms: "10", errorMode: "lagrange", bound: "3^CEIL(ABS(x))", order: "n+1", domain: "", note: "all x; Lagrange with |f^(k)| = e^ξ ≤ 3^⌈|x|⌉" },
+  { name: "SIN", label: "sin x", kind: "taylor", term: "(-1)^n * x^(2*n+1)/(2*n+1)!", terms: "8", errorMode: "lagrange", bound: "1", order: "2*n+3", domain: "", note: "all x; Lagrange with |f^(k)| ≤ 1" },
+  { name: "COS", label: "cos x", kind: "taylor", term: "(-1)^n * x^(2*n)/(2*n)!", terms: "8", errorMode: "lagrange", bound: "1", order: "2*n+2", domain: "", note: "all x; Lagrange with |f^(k)| ≤ 1" },
   { name: "LN1P", label: "ln(1 + x)", kind: "taylor", term: "(-1)^n * x^(n+1)/(n+1)", terms: "20", error: "ABS(x)^(n+2)/((n+2)*(1 - ABS(x)))", domain: "-1:1", note: "|x| < 1" },
   { name: "ATAN", label: "arctan x", kind: "taylor", term: "(-1)^n * x^(2*n+1)/(2*n+1)", terms: "20", error: "ABS(x)^(2*n+3)/(2*n+3)", domain: "-1:1", note: "|x| ≤ 1" },
   { name: "GEOM", label: "1/(1 − x)", kind: "taylor", term: "x^n", terms: "20", error: "ABS(x)^(n+1)/(1 - ABS(x))", domain: "-1:1", note: "|x| < 1" },

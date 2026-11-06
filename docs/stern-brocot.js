@@ -6021,14 +6021,32 @@ function applyFunction(definition, argument, context) {
   for (let n = 0;n <= last; n++) {
     total = total.add(evaluateExpression(definition.term, { ...inner, vars: { ...vars, x: seriesX, n: new Integer(n) } }));
   }
-  const errorText = String(definition.error ?? "").trim();
-  if (!errorText)
+  const bound = remainderBound(definition, argument, last, inner, vars);
+  if (bound === null)
     return simplify3(total);
-  const error = evaluateExpression(errorText, { ...inner, vars: { ...vars, n: new Integer(last) } });
-  const bound = magnitude(error);
   if (bound.equals(Rational.zero))
     return simplify3(total);
   return simplify3(total.add(new RationalInterval(bound.negate(), bound)));
+}
+function remainderBound(definition, argument, last, inner, vars) {
+  const atLast = { ...inner, vars: { ...vars, n: new Integer(last) } };
+  if (definition.errorMode === "lagrange") {
+    const boundText = String(definition.bound ?? "").trim();
+    if (!boundText)
+      throw new SyntaxError("Lagrange mode needs a derivative bound M(x, n)");
+    const order = evaluateExpression(String(definition.order ?? "").trim() || "n+1", atLast);
+    if (!(order instanceof Integer) || order.value < 1n)
+      throw new TypeError(`the derivative order k must be a whole number ≥ 1 (got ${order})`);
+    const derivativeBound = magnitude(evaluateExpression(boundText, atLast));
+    let factorial = 1n;
+    for (let i = 2n;i <= order.value; i++)
+      factorial *= i;
+    return derivativeBound.multiply(magnitude(argument).pow(order.value)).divide(new Rational(factorial));
+  }
+  const errorText = String(definition.error ?? "").trim();
+  if (!errorText)
+    return null;
+  return magnitude(evaluateExpression(errorText, atLast));
 }
 function nextName(used, preferred) {
   const taken = new Set(used);
@@ -6059,9 +6077,9 @@ function nameProblem(name, used) {
   return null;
 }
 var PRESETS = [
-  { name: "EXP", label: "eˣ", kind: "taylor", term: "x^n/n!", terms: "10", error: "3^CEIL(ABS(x)) * ABS(x)^(n+1)/(n+1)!", domain: "", note: "all x; e^|x| ≤ 3^⌈|x|⌉" },
-  { name: "SIN", label: "sin x", kind: "taylor", term: "(-1)^n * x^(2*n+1)/(2*n+1)!", terms: "8", error: "ABS(x)^(2*n+3)/(2*n+3)!", domain: "", note: "all x" },
-  { name: "COS", label: "cos x", kind: "taylor", term: "(-1)^n * x^(2*n)/(2*n)!", terms: "8", error: "ABS(x)^(2*n+2)/(2*n+2)!", domain: "", note: "all x" },
+  { name: "EXP", label: "eˣ", kind: "taylor", term: "x^n/n!", terms: "10", errorMode: "lagrange", bound: "3^CEIL(ABS(x))", order: "n+1", domain: "", note: "all x; Lagrange with |f^(k)| = e^ξ ≤ 3^⌈|x|⌉" },
+  { name: "SIN", label: "sin x", kind: "taylor", term: "(-1)^n * x^(2*n+1)/(2*n+1)!", terms: "8", errorMode: "lagrange", bound: "1", order: "2*n+3", domain: "", note: "all x; Lagrange with |f^(k)| ≤ 1" },
+  { name: "COS", label: "cos x", kind: "taylor", term: "(-1)^n * x^(2*n)/(2*n)!", terms: "8", errorMode: "lagrange", bound: "1", order: "2*n+2", domain: "", note: "all x; Lagrange with |f^(k)| ≤ 1" },
   { name: "LN1P", label: "ln(1 + x)", kind: "taylor", term: "(-1)^n * x^(n+1)/(n+1)", terms: "20", error: "ABS(x)^(n+2)/((n+2)*(1 - ABS(x)))", domain: "-1:1", note: "|x| < 1" },
   { name: "ATAN", label: "arctan x", kind: "taylor", term: "(-1)^n * x^(2*n+1)/(2*n+1)", terms: "20", error: "ABS(x)^(2*n+3)/(2*n+3)", domain: "-1:1", note: "|x| ≤ 1" },
   { name: "GEOM", label: "1/(1 − x)", kind: "taylor", term: "x^n", terms: "20", error: "ABS(x)^(n+1)/(1 - ABS(x))", domain: "-1:1", note: "|x| < 1" },
@@ -6072,7 +6090,7 @@ var PRESETS = [
 
 // src/functions-panel.js
 var STORAGE_KEY = "ratree.functions.v1";
-var FIELDS = ["formula", "term", "terms", "error", "domain"];
+var FIELDS = ["formula", "term", "terms", "error", "domain", "errorMode", "bound", "order"];
 function plainDefinition(definition) {
   const { name, kind, note } = definition;
   const result = { name, kind, note: note ?? "" };
@@ -6152,7 +6170,9 @@ class FunctionsPanel {
       if (value === "taylor" && definition.term === undefined)
         Object.assign(definition, { term: "x^n/n!", terms: "10", error: "", domain: "" });
     }
-    this.changed(field === "kind");
+    if (field === "errorMode" && value === "lagrange" && definition.bound === undefined)
+      Object.assign(definition, { bound: "1", order: "n+1" });
+    this.changed(field === "kind" || field === "errorMode");
   }
   changed(rerender = true) {
     saveDefinitions(this.storage, this.definitions);
@@ -6247,7 +6267,25 @@ class FunctionsPanel {
     } else {
       card.append(this.field(definition, "term", "term(x, n) =", "x^n/n!"));
       card.append(this.field(definition, "terms", "N =", "10 or 5*d"));
-      card.append(this.field(definition, "error", "error(x, n=N) =", "bound on the remainder (blank: none)"));
+      const modes = this.element("div", "fn-kinds fn-modes");
+      for (const [mode, label] of [["explicit", "Error formula"], ["lagrange", "Lagrange"]]) {
+        const active = (definition.errorMode ?? "explicit") === mode;
+        const button = this.element("button", `fn-kind${active ? " active" : ""}`, label);
+        button.type = "button";
+        button.title = mode === "lagrange" ? "Remainder ≤ M·|x|^k/k! with M bounding |f^(k)| between 0 and x" : "Write the remainder bound directly";
+        button.addEventListener("click", () => {
+          if (!active)
+            this.update(definition.name, "errorMode", mode);
+        });
+        modes.append(button);
+      }
+      card.append(modes);
+      if (definition.errorMode === "lagrange") {
+        card.append(this.field(definition, "bound", "|f^(k)| ≤ M(x, n) =", "e.g. 1 or 3^CEIL(ABS(x))"));
+        card.append(this.field(definition, "order", "k =", "n+1"));
+      } else {
+        card.append(this.field(definition, "error", "error(x, n=N) =", "bound on the remainder (blank: none)"));
+      }
       card.append(this.field(definition, "domain", "domain", "all x, or an interval like -1:1"));
     }
     if (definition.note)
@@ -7762,7 +7800,7 @@ class SternBrocotTreeVisualizer {
       <ul>
         <li>The <strong>Functions</strong> panel (below Help) defines capitalised functions. <code>F</code> alone means <code>F(x)</code>; <code>F(expr)</code> evaluates <code>expr</code> and applies <code>F</code>; calls nest: <code>F(G(x) + 1)</code>.</li>
         <li><strong>Formula</strong>: a rational expression in <code>x</code>, e.g. <code>x^2 - 2</code>.</li>
-        <li><strong>Taylor</strong>: <code>term(x, n)</code> is summed for <code>n = 0..N</code>; <code>N</code> is a number or a formula in <code>d</code> (<code>5*d</code> gives N = 15 at depth 3). The <code>error(x, n)</code> formula, evaluated at <code>n = N</code>, bounds the remainder; the result is the exact sum ± that bound, an interval. A domain such as <code>-1:1</code> says where the bound holds; x outside it is an error.</li>
+        <li><strong>Taylor</strong>: <code>term(x, n)</code> is summed for <code>n = 0..N</code>; <code>N</code> is a number or a formula in <code>d</code> (<code>5*d</code> gives N = 15 at depth 3). The remainder bound comes from either an <strong>Error formula</strong> <code>error(x, n)</code> evaluated at <code>n = N</code>, or <strong>Lagrange</strong> mode (Taylor's theorem): <code>M · |x|^k / k!</code>, where <code>M(x, n)</code> bounds the k-th derivative between 0 and x and <code>k</code> (default <code>n+1</code>; <code>2*n+3</code> for sin's odd series) is the order after the last power used. The result is the exact sum ± that bound, an interval. A domain such as <code>-1:1</code> says where the bound holds; x outside it is an error.</li>
         <li>Intervals propagate exactly through interval arithmetic: <code>EXP(0:1)</code> encloses e<sup>x</sup> on [0, 1] (alternating series give wide but valid enclosures).</li>
         <li><strong>Predefined</strong> adds editable definitions with checked remainder bounds: e<sup>x</sup>, sin, cos (all x), ln(1+x), 1/(1−x), √(1+x) (|x| &lt; 1), arctan (|x| ≤ 1), and the formulas x², 1/x.</li>
         <li>Built-ins for bounds: <code>ABS</code>, <code>FLOOR</code>, <code>CEIL</code>, <code>MIN</code>, <code>MAX</code>, <code>BINOM(a, k)</code>.</li>

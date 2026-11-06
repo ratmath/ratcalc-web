@@ -71,8 +71,10 @@ UI in `src/functions-panel.js`, saved in `localStorage`):
   calls nest (`F(G(x) + 1)`). Variables: `x` (node), `d` (depth).
 - **Formula**: a rational expression in `x`.
 - **Taylor**: `term(x, n)` summed for `n = 0..N`; `N` is a number or a formula
-  in `d` (`5*d` → 15 at depth 3); `error(x, n)` at `n = N` bounds the
-  remainder, giving the exact sum ± bound as an interval; an optional domain
+  in `d` (`5*d` → 15 at depth 3); the remainder bound is either an error
+  formula `error(x, n)` at `n = N`, or Lagrange mode `M · |x|^k / k!` with a
+  derivative bound `M(x, n)` and order `k` (default `n+1`), giving the exact
+  sum ± bound as an interval; an optional domain
   (`-1:1`) is enforced. Series use x⁰ = 1, including at x = 0.
 - **Predefined**: eˣ, sin, cos (all x), ln(1+x), 1/(1−x), √(1+x) (|x| < 1),
   arctan (|x| ≤ 1), x², 1/x — editable after insertion.
