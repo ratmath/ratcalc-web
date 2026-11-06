@@ -54,7 +54,7 @@
 
                 <div class="expression-calculator">
                     <label for="expressionInput">Expression (using x):</label>
-                    <input type="text" id="expressionInput" placeholder="e.g., x^2, x^3 - 2, 5*x - 3 (exact R expression)" />
+                    <input type="text" id="expressionInput" placeholder="e.g., x^2 - 2, F, F(x+1), EXP(1/2), 5*d (exact)" />
                     <div class="info-item" style="margin-top: 0.5rem">
                         <label>Result:</label>
                         <span id="expressionResult">Enter an expression above</span>
@@ -106,6 +106,11 @@
                             ">
                         Help
                     </button>
+
+                    <details id="functionsDetails" class="functions-details" open>
+                        <summary>Functions</summary>
+                        <div id="functionsPanel" class="functions-panel"></div>
+                    </details>
                 </div>
             </div>
 

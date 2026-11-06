@@ -59,6 +59,22 @@ fraction" and the "Expression (using x)" box read exact `R` expressions
 (`3.~7~15`, `0.#3`, `x^2 - 2`), with the current node inserted for `x`.
 Scientific display uses the RiX spelling (`2.33333_^0…`).
 
+**Named functions.** The Functions panel (below Help; collapsed on phones)
+defines capitalised functions for the expression box (`src/named-functions.js`,
+UI in `src/functions-panel.js`, saved in `localStorage`):
+
+- `F` means `F(x)` at the current node; `F(expr)` evaluates `expr` first;
+  calls nest (`F(G(x) + 1)`). Variables: `x` (node), `d` (depth).
+- **Formula**: a rational expression in `x`.
+- **Taylor**: `term(x, n)` summed for `n = 0..N`; `N` is a number or a formula
+  in `d` (`5*d` → 15 at depth 3); `error(x, n)` at `n = N` bounds the
+  remainder, giving the exact sum ± bound as an interval; an optional domain
+  (`-1:1`) is enforced. Series use x⁰ = 1, including at x = 0.
+- **Predefined**: eˣ, sin, cos (all x), ln(1+x), 1/(1−x), √(1+x) (|x| < 1),
+  arctan (|x| ≤ 1), x², 1/x — editable after insertion.
+- Built-ins for bounds: `ABS`, `FLOOR`, `CEIL`, `MIN`, `MAX`, `BINOM(a, k)`.
+  Interval arguments propagate by interval arithmetic (valid, sometimes wide).
+
 ## Building and testing
 
 ```bash

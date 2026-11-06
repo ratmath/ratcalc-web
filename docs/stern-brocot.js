@@ -5815,10 +5815,474 @@ function formatScientific(value, significant = 10) {
   return `${negative ? "-" : ""}${mantissa}${exponent === 0 ? "" : `_^${exponent}`}${rounded}`;
 }
 
+// src/named-functions.js
+var NAME_PATTERN = /^[A-Z][A-Z0-9]*$/;
+var MAX_TERMS = 2000;
+var MAX_CALL_DEPTH = 40;
+
+class SeriesArgument extends RationalInterval {
+  pow(exponent) {
+    return BigInt(exponent) === 0n ? new Integer(1) : super.pow(exponent);
+  }
+}
+
+class SeriesScalar extends Rational {
+  pow(exponent) {
+    return BigInt(exponent) === 0n ? new Integer(1) : super.pow(exponent);
+  }
+}
+function seriesArgument(value) {
+  if (isInterval(value))
+    return new SeriesArgument(value.low, value.high);
+  const exact = asRational3(value);
+  return exact instanceof Rational ? new SeriesScalar(exact.numerator, exact.denominator) : value;
+}
+var asRational3 = (value) => value instanceof Integer ? value.toRational() : value;
+var simplify3 = (value) => value instanceof Rational && value.denominator === 1n ? new Integer(value.numerator) : value;
+var isInterval = (value) => value instanceof RationalInterval;
+function absolute(value) {
+  if (isInterval(value)) {
+    const low = value.low.abs();
+    const high = value.high.abs();
+    if (value.low.lessThanOrEqual(Rational.zero) && value.high.greaterThanOrEqual(Rational.zero)) {
+      return new RationalInterval(Rational.zero, low.greaterThan(high) ? low : high);
+    }
+    return low.lessThan(high) ? new RationalInterval(low, high) : new RationalInterval(high, low);
+  }
+  return value.abs();
+}
+function magnitude(value) {
+  if (isInterval(value)) {
+    const low = value.low.abs();
+    const high = value.high.abs();
+    return low.greaterThan(high) ? low : high;
+  }
+  return asRational3(value).abs();
+}
+var extreme = (values, pick) => values.reduce((best, value) => {
+  const [a, b] = [isInterval(best) ? best : asRational3(best), isInterval(value) ? value : asRational3(value)];
+  if (isInterval(a) || isInterval(b)) {
+    const lo = (v) => isInterval(v) ? v.low : v;
+    const hi = (v) => isInterval(v) ? v.high : v;
+    const choose = (p, q) => pick(p, q) ? p : q;
+    return new RationalInterval(choose(lo(a), lo(b)), choose(hi(a), hi(b)));
+  }
+  return pick(a, b) ? a : b;
+});
+function binomial(top, count) {
+  if (!(count instanceof Integer) || count.value < 0n)
+    throw new Error("BINOM(a, k) needs a whole k ≥ 0");
+  let result = new Rational(1);
+  const a = asRational3(top);
+  for (let i = 0n;i < count.value; i += 1n) {
+    result = result.multiply(a.subtract(new Rational(i))).divide(new Rational(i + 1n));
+  }
+  return result;
+}
+var BUILTINS = {
+  ABS: { arity: [1, 1], apply: ([v]) => absolute(v) },
+  FLOOR: { arity: [1, 1], apply: ([v]) => new Integer(isInterval(v) ? v.low.floor() : asRational3(v).floor()) },
+  CEIL: { arity: [1, 1], apply: ([v]) => new Integer(isInterval(v) ? v.high.ceil() : asRational3(v).ceil()) },
+  MIN: { arity: [1, Infinity], apply: (args) => extreme(args, (a, b) => a.lessThanOrEqual(b)) },
+  MAX: { arity: [1, Infinity], apply: (args) => extreme(args, (a, b) => a.greaterThanOrEqual(b)) },
+  BINOM: { arity: [2, 2], apply: ([a, k]) => binomial(a, k) }
+};
+function closingParen(text, open) {
+  let depth = 0;
+  for (let i = open;i < text.length; i++) {
+    if (text[i] === "(")
+      depth += 1;
+    else if (text[i] === ")") {
+      depth -= 1;
+      if (depth === 0)
+        return i;
+    }
+  }
+  throw new SyntaxError("missing ')'");
+}
+function splitArguments(text) {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0;i < text.length; i++) {
+    if (text[i] === "(" || text[i] === "[")
+      depth += 1;
+    else if (text[i] === ")" || text[i] === "]")
+      depth -= 1;
+    else if (text[i] === "," && depth === 0) {
+      parts.push(text.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(text.slice(start));
+  return parts;
+}
+function evaluateExpression(text, context) {
+  const source = String(text ?? "").trim();
+  if (!source)
+    throw new SyntaxError("empty expression");
+  const depth = context.depth ?? 0;
+  if (depth > MAX_CALL_DEPTH)
+    throw new RangeError("functions call each other too deeply (a cycle?)");
+  const pieces = [""];
+  const values = [];
+  const insert = (value) => {
+    values.push(value);
+    pieces.push("");
+  };
+  let i = 0;
+  while (i < source.length) {
+    const rest = source.slice(i);
+    const word = /^[A-Za-z][A-Za-z0-9]*/.exec(rest);
+    if (!word || i > 0 && /[0-9A-Za-z_.\]]/.test(source[i - 1])) {
+      pieces[pieces.length - 1] += source[i];
+      i += 1;
+      continue;
+    }
+    const name = word[0];
+    i += name.length;
+    if (/^[a-z]/.test(name)) {
+      if (!(name in context.vars) || context.vars[name] === undefined) {
+        throw new ReferenceError(`unknown variable '${name}': variables are x and d (and n in Taylor definitions); functions are capitalised, like F(x)`);
+      }
+      insert(context.vars[name]);
+      continue;
+    }
+    if (!NAME_PATTERN.test(name))
+      throw new SyntaxError(`'${name}': names are capitalised (F, G, EXP); variables are x, d and n`);
+    let args = null;
+    const afterSpace = source.slice(i).match(/^\s*/)[0].length;
+    if (source[i + afterSpace] === "(") {
+      const open = i + afterSpace;
+      const close = closingParen(source, open);
+      args = splitArguments(source.slice(open + 1, close)).map((arg) => evaluateExpression(arg, context));
+      i = close + 1;
+    }
+    insert(callFunction(name, args, context));
+  }
+  return simplify3(R(pieces, ...values));
+}
+function lookup(functions, name) {
+  if (!functions)
+    return;
+  return functions instanceof Map ? functions.get(name) : functions[name];
+}
+function callFunction(name, args, context) {
+  const builtin = BUILTINS[name];
+  if (builtin) {
+    const list = args ?? [context.vars.x];
+    const [min, max] = builtin.arity;
+    if (list.length < min || list.length > max)
+      throw new TypeError(`${name} takes ${min === max ? min : `${min} or more`} argument${max === 1 ? "" : "s"}`);
+    return builtin.apply(list);
+  }
+  const definition = lookup(context.functions, name);
+  if (!definition)
+    throw new ReferenceError(`unknown function '${name}'`);
+  if (args && args.length !== 1)
+    throw new TypeError(`${name} takes one argument`);
+  return applyFunction(definition, args ? args[0] : context.vars.x, { ...context, name });
+}
+function termCount(definition, context) {
+  const text = String(definition.terms ?? "").trim() || "0";
+  const value = evaluateExpression(text, { vars: { d: context.vars.d }, functions: null, depth: 0 });
+  if (!(value instanceof Integer))
+    throw new TypeError(`N = ${text} must give a whole number (got ${value})`);
+  if (value.value < 0n)
+    throw new RangeError("N must be at least 0");
+  if (value.value > BigInt(MAX_TERMS))
+    throw new RangeError(`N is limited to ${MAX_TERMS}`);
+  return Number(value.value);
+}
+function checkDomain(definition, x, context) {
+  const text = String(definition.domain ?? "").trim();
+  if (!text)
+    return;
+  const domain = evaluateExpression(text, { vars: { d: context.vars.d }, functions: null, depth: 0 });
+  const lo = isInterval(domain) ? domain.low : asRational3(domain);
+  const hi = isInterval(domain) ? domain.high : asRational3(domain);
+  const xl = isInterval(x) ? x.low : asRational3(x);
+  const xh = isInterval(x) ? x.high : asRational3(x);
+  if (xl.lessThan(lo) || xh.greaterThan(hi)) {
+    throw new RangeError(`${context.name ?? "function"}: x = ${x} is outside the domain ${text} where its error bound holds`);
+  }
+}
+function applyFunction(definition, argument, context) {
+  const vars = { ...context.vars, x: argument };
+  const inner = { ...context, vars, depth: (context.depth ?? 0) + 1 };
+  if (definition.kind === "formula")
+    return evaluateExpression(definition.formula, inner);
+  if (definition.kind !== "taylor")
+    throw new TypeError(`unknown function kind '${definition.kind}'`);
+  checkDomain(definition, argument, context);
+  const last = termCount(definition, context);
+  const seriesX = seriesArgument(argument);
+  let total = new Integer(0);
+  for (let n = 0;n <= last; n++) {
+    total = total.add(evaluateExpression(definition.term, { ...inner, vars: { ...vars, x: seriesX, n: new Integer(n) } }));
+  }
+  const errorText = String(definition.error ?? "").trim();
+  if (!errorText)
+    return simplify3(total);
+  const error = evaluateExpression(errorText, { ...inner, vars: { ...vars, n: new Integer(last) } });
+  const bound = magnitude(error);
+  if (bound.equals(Rational.zero))
+    return simplify3(total);
+  return simplify3(total.add(new RationalInterval(bound.negate(), bound)));
+}
+function nextName(used, preferred) {
+  const taken = new Set(used);
+  if (preferred && NAME_PATTERN.test(preferred) && !taken.has(preferred) && !BUILTINS[preferred])
+    return preferred;
+  if (preferred) {
+    for (let suffix = 2;; suffix++) {
+      const candidate = `${preferred}${suffix}`;
+      if (!taken.has(candidate))
+        return candidate;
+    }
+  }
+  for (let round = 0;; round++) {
+    for (const letter of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+      const candidate = round === 0 ? letter : `${letter}${round}`;
+      if (!taken.has(candidate) && !BUILTINS[candidate])
+        return candidate;
+    }
+  }
+}
+function nameProblem(name, used) {
+  if (!NAME_PATTERN.test(name))
+    return "Names are capital letters and digits, starting with a letter (F, G2, EXP)";
+  if (BUILTINS[name])
+    return `${name} is a built-in`;
+  if (used.includes(name))
+    return `${name} is already defined`;
+  return null;
+}
+var PRESETS = [
+  { name: "EXP", label: "eˣ", kind: "taylor", term: "x^n/n!", terms: "10", error: "3^CEIL(ABS(x)) * ABS(x)^(n+1)/(n+1)!", domain: "", note: "all x; e^|x| ≤ 3^⌈|x|⌉" },
+  { name: "SIN", label: "sin x", kind: "taylor", term: "(-1)^n * x^(2*n+1)/(2*n+1)!", terms: "8", error: "ABS(x)^(2*n+3)/(2*n+3)!", domain: "", note: "all x" },
+  { name: "COS", label: "cos x", kind: "taylor", term: "(-1)^n * x^(2*n)/(2*n)!", terms: "8", error: "ABS(x)^(2*n+2)/(2*n+2)!", domain: "", note: "all x" },
+  { name: "LN1P", label: "ln(1 + x)", kind: "taylor", term: "(-1)^n * x^(n+1)/(n+1)", terms: "20", error: "ABS(x)^(n+2)/((n+2)*(1 - ABS(x)))", domain: "-1:1", note: "|x| < 1" },
+  { name: "ATAN", label: "arctan x", kind: "taylor", term: "(-1)^n * x^(2*n+1)/(2*n+1)", terms: "20", error: "ABS(x)^(2*n+3)/(2*n+3)", domain: "-1:1", note: "|x| ≤ 1" },
+  { name: "GEOM", label: "1/(1 − x)", kind: "taylor", term: "x^n", terms: "20", error: "ABS(x)^(n+1)/(1 - ABS(x))", domain: "-1:1", note: "|x| < 1" },
+  { name: "SQRT1P", label: "√(1 + x)", kind: "taylor", term: "BINOM(1/2, n) * x^n", terms: "20", error: "ABS(BINOM(1/2, n+1)) * ABS(x)^(n+1)/(1 - ABS(x))", domain: "-1:1", note: "|x| < 1" },
+  { name: "SQ", label: "x²", kind: "formula", formula: "x^2", note: "formula" },
+  { name: "RECIP", label: "1/x", kind: "formula", formula: "1/x", note: "formula" }
+];
+
+// src/functions-panel.js
+var STORAGE_KEY = "ratree.functions.v1";
+var FIELDS = ["formula", "term", "terms", "error", "domain"];
+function plainDefinition(definition) {
+  const { name, kind, note } = definition;
+  const result = { name, kind, note: note ?? "" };
+  for (const field of FIELDS)
+    if (definition[field] !== undefined)
+      result[field] = String(definition[field]);
+  return result;
+}
+function loadDefinitions(storage) {
+  try {
+    const parsed = JSON.parse(storage?.getItem(STORAGE_KEY) ?? "[]");
+    if (!Array.isArray(parsed))
+      return [];
+    const names = [];
+    return parsed.filter((item) => {
+      if (!item || item.kind !== "formula" && item.kind !== "taylor" || nameProblem(item.name, names))
+        return false;
+      names.push(item.name);
+      return true;
+    }).map(plainDefinition);
+  } catch {
+    return [];
+  }
+}
+function saveDefinitions(storage, definitions) {
+  try {
+    storage?.setItem(STORAGE_KEY, JSON.stringify(definitions.map(plainDefinition)));
+  } catch {}
+}
+
+class FunctionsPanel {
+  constructor(root, { context, format = String, onChange = () => {}, storage = globalThis.localStorage } = {}) {
+    this.root = root;
+    this.context = context;
+    this.format = format;
+    this.onChange = onChange;
+    this.storage = storage;
+    this.definitions = loadDefinitions(storage);
+    this.render();
+  }
+  map() {
+    return new Map(this.definitions.map((definition) => [definition.name, definition]));
+  }
+  names() {
+    return this.definitions.map(({ name }) => name);
+  }
+  add(kind, preset = null) {
+    const name = nextName(this.names(), preset?.name);
+    const definition = preset ? { ...plainDefinition(preset), name } : kind === "formula" ? { name, kind, formula: "x^2", note: "" } : { name, kind, term: "x^n/n!", terms: "10", error: "", domain: "", note: "" };
+    this.definitions.push(definition);
+    this.changed();
+    return definition;
+  }
+  remove(name) {
+    this.definitions = this.definitions.filter((definition) => definition.name !== name);
+    this.changed();
+  }
+  rename(oldName, newName) {
+    const name = newName.trim().toUpperCase();
+    if (name === oldName)
+      return null;
+    const problem = nameProblem(name, this.names().filter((other) => other !== oldName));
+    if (problem)
+      return problem;
+    this.definitions.find((definition) => definition.name === oldName).name = name;
+    this.changed();
+    return null;
+  }
+  update(name, field, value) {
+    const definition = this.definitions.find((item) => item.name === name);
+    definition[field] = value;
+    if (field === "kind") {
+      if (value === "formula" && definition.formula === undefined)
+        definition.formula = "x";
+      if (value === "taylor" && definition.term === undefined)
+        Object.assign(definition, { term: "x^n/n!", terms: "10", error: "", domain: "" });
+    }
+    this.changed(field === "kind");
+  }
+  changed(rerender = true) {
+    saveDefinitions(this.storage, this.definitions);
+    if (rerender)
+      this.render();
+    else
+      this.refresh();
+    this.onChange();
+  }
+  status(definition) {
+    try {
+      const context = { ...this.context(), functions: this.map() };
+      const parts = [];
+      if (definition.kind === "taylor")
+        parts.push(`N = ${termCount(definition, context)} at depth ${context.vars.d}`);
+      parts.push(`${definition.name}(x) = ${this.format(applyFunction(definition, context.vars.x, { ...context, name: definition.name }))}`);
+      return { ok: true, text: parts.join(" · ") };
+    } catch (error) {
+      return { ok: false, text: error.message };
+    }
+  }
+  refresh() {
+    for (const card of this.root.querySelectorAll(".fn-card")) {
+      const definition = this.definitions.find((item) => item.name === card.dataset.name);
+      const line = card.querySelector(".fn-status");
+      if (!definition || !line)
+        continue;
+      const { ok, text } = this.status(definition);
+      line.textContent = text;
+      line.classList.toggle("fn-error", !ok);
+    }
+  }
+  element(tag, className, text) {
+    const node = this.root.ownerDocument.createElement(tag);
+    if (className)
+      node.className = className;
+    if (text !== undefined)
+      node.textContent = text;
+    return node;
+  }
+  field(definition, field, label, placeholder) {
+    const row = this.element("label", "fn-field");
+    row.append(this.element("span", "fn-label", label));
+    const input = this.element("input", `fn-input fn-${field}`);
+    input.type = "text";
+    input.value = definition[field] ?? "";
+    input.placeholder = placeholder;
+    input.spellcheck = false;
+    input.addEventListener("input", () => this.update(definition.name, field, input.value));
+    row.append(input);
+    return row;
+  }
+  card(definition) {
+    const card = this.element("div", "fn-card");
+    card.dataset.name = definition.name;
+    const head = this.element("div", "fn-head");
+    const name = this.element("input", "fn-name");
+    name.value = definition.name;
+    name.title = "Function name: capital letters and digits";
+    name.addEventListener("change", () => {
+      const problem = this.rename(definition.name, name.value);
+      if (problem) {
+        name.value = definition.name;
+        card.querySelector(".fn-status").textContent = problem;
+        card.querySelector(".fn-status").classList.add("fn-error");
+      }
+    });
+    head.append(name);
+    const kinds = this.element("div", "fn-kinds");
+    for (const [kind, label] of [["formula", "Formula"], ["taylor", "Taylor"]]) {
+      const button = this.element("button", `fn-kind${definition.kind === kind ? " active" : ""}`, label);
+      button.type = "button";
+      button.addEventListener("click", () => {
+        if (definition.kind !== kind)
+          this.update(definition.name, "kind", kind);
+      });
+      kinds.append(button);
+    }
+    head.append(kinds);
+    const remove = this.element("button", "fn-remove", "×");
+    remove.type = "button";
+    remove.title = `Remove ${definition.name}`;
+    remove.addEventListener("click", () => this.remove(definition.name));
+    head.append(remove);
+    card.append(head);
+    if (definition.kind === "formula") {
+      card.append(this.field(definition, "formula", `${definition.name}(x) =`, "x^2 - 2"));
+    } else {
+      card.append(this.field(definition, "term", "term(x, n) =", "x^n/n!"));
+      card.append(this.field(definition, "terms", "N =", "10 or 5*d"));
+      card.append(this.field(definition, "error", "error(x, n=N) =", "bound on the remainder (blank: none)"));
+      card.append(this.field(definition, "domain", "domain", "all x, or an interval like -1:1"));
+    }
+    if (definition.note)
+      card.append(this.element("div", "fn-note", definition.note));
+    card.append(this.element("div", "fn-status"));
+    return card;
+  }
+  render() {
+    this.root.replaceChildren();
+    const tools = this.element("div", "fn-tools");
+    for (const [kind, label] of [["formula", "+ Formula"], ["taylor", "+ Taylor"]]) {
+      const button = this.element("button", "fn-add", label);
+      button.type = "button";
+      button.addEventListener("click", () => this.add(kind));
+      tools.append(button);
+    }
+    const presets = this.element("select", "fn-presets");
+    presets.title = "Add a predefined function";
+    presets.append(Object.assign(this.element("option", "", "Predefined…"), { value: "" }));
+    for (const preset of PRESETS)
+      presets.append(Object.assign(this.element("option", "", `${preset.label} (${preset.note})`), { value: preset.name }));
+    presets.addEventListener("change", () => {
+      const preset = PRESETS.find(({ name }) => name === presets.value);
+      presets.value = "";
+      if (preset)
+        this.add(preset.kind, preset);
+    });
+    tools.append(presets);
+    this.root.append(tools);
+    if (this.definitions.length === 0) {
+      this.root.append(this.element("p", "fn-empty", "No functions yet. In the expression box, F means F(x) at the current node and F(expr) applies F to expr."));
+    }
+    for (const definition of this.definitions)
+      this.root.append(this.card(definition));
+    this.refresh();
+  }
+}
+
 // src/stern-brocot-web.js
-function evaluateAt(expression, value) {
-  const pieces = expression.split(/\bx\b/);
-  return R(pieces, ...pieces.slice(1).map(() => value));
+function evaluateAt(expression, value, { depth = 0, functions = null } = {}) {
+  return evaluateExpression(expression, { vars: { x: value, d: new Integer(depth) }, functions });
 }
 function fractionFromInput(input) {
   const value = R([input]);
@@ -5841,6 +6305,16 @@ class SternBrocotTreeVisualizer {
     this.scrollOffset = { x: 0, y: 0 };
     this.treeContainer = null;
     this.initializeElements();
+    const panelRoot = document.getElementById("functionsPanel");
+    if (panelRoot) {
+      if (window.innerWidth <= 768)
+        document.getElementById("functionsDetails")?.removeAttribute("open");
+      this.functionsPanel = new FunctionsPanel(panelRoot, {
+        context: () => this.functionContext(),
+        format: (value) => this.formatFunctionValue(value).replace(/<[^>]*>/g, ""),
+        onChange: () => this.updateExpressionResult()
+      });
+    }
     this.setupEventListeners();
     this.setupTooltips();
     this.loadFromURL();
@@ -7094,14 +7568,29 @@ class SternBrocotTreeVisualizer {
       return rational.toString();
     }
   }
+  functionContext() {
+    const depth = this.currentFraction.sternBrocotDepth();
+    return {
+      vars: { x: this.currentFraction.toRational(), d: new Integer(Number.isFinite(depth) ? depth : 0) },
+      functions: this.functionsPanel ? this.functionsPanel.map() : null
+    };
+  }
+  formatFunctionValue(value) {
+    if (value?.low && value?.high) {
+      return `[${this.formatRationalByMode(value.low, this.expressionDisplayMode)}, ${this.formatRationalByMode(value.high, this.expressionDisplayMode)}]`;
+    }
+    return this.formatRationalByMode(value.toRational ? value.toRational() : value, this.expressionDisplayMode);
+  }
   updateExpressionResult() {
+    this.functionsPanel?.refresh();
     const expression = this.elements.expressionInput.value.trim();
     if (!expression) {
       this.elements.expressionResult.textContent = "Enter an expression above";
       return;
     }
     try {
-      const result = evaluateAt(expression, this.currentFraction.toRational());
+      const { vars, functions } = this.functionContext();
+      const result = evaluateAt(expression, vars.x, { depth: Number(vars.d.value), functions });
       let resultText;
       if (result.low && result.high) {
         const lowerText = this.formatRationalByMode(result.low, this.expressionDisplayMode);
@@ -7143,6 +7632,17 @@ class SternBrocotTreeVisualizer {
   }
   showHelpModal() {
     this.elements.helpContent.innerHTML = `
+      <h3>Expressions and Named Functions</h3>
+      <p>The expression box evaluates exactly at the current node: <code>x</code> is the node's value and <code>d</code> its depth. Literals use RiX spelling (<code>3/4</code>, <code>0.#3</code>, <code>2.5_^-2</code>, <code>1:2</code>); operators are <code>+ - * / ^ ! :</code>.</p>
+      <ul>
+        <li>The <strong>Functions</strong> panel (below Help) defines capitalised functions. <code>F</code> alone means <code>F(x)</code>; <code>F(expr)</code> evaluates <code>expr</code> and applies <code>F</code>; calls nest: <code>F(G(x) + 1)</code>.</li>
+        <li><strong>Formula</strong>: a rational expression in <code>x</code>, e.g. <code>x^2 - 2</code>.</li>
+        <li><strong>Taylor</strong>: <code>term(x, n)</code> is summed for <code>n = 0..N</code>; <code>N</code> is a number or a formula in <code>d</code> (<code>5*d</code> gives N = 15 at depth 3). The <code>error(x, n)</code> formula, evaluated at <code>n = N</code>, bounds the remainder; the result is the exact sum ± that bound, an interval. A domain such as <code>-1:1</code> says where the bound holds; x outside it is an error.</li>
+        <li>Intervals propagate exactly through interval arithmetic: <code>EXP(0:1)</code> encloses e<sup>x</sup> on [0, 1] (alternating series give wide but valid enclosures).</li>
+        <li><strong>Predefined</strong> adds editable definitions with checked remainder bounds: e<sup>x</sup>, sin, cos (all x), ln(1+x), 1/(1−x), √(1+x) (|x| &lt; 1), arctan (|x| ≤ 1), and the formulas x², 1/x.</li>
+        <li>Built-ins for bounds: <code>ABS</code>, <code>FLOOR</code>, <code>CEIL</code>, <code>MIN</code>, <code>MAX</code>, <code>BINOM(a, k)</code>.</li>
+      </ul>
+
       <h3>What is the Stern-Brocot Tree?</h3>
       <p>The Stern-Brocot tree is a beautiful mathematical structure that organizes all rational numbers (fractions) in a binary tree format. Every rational number appears exactly once in the tree, and it's built using a simple but elegant process called the <strong>mediant operation</strong>.</p>
 

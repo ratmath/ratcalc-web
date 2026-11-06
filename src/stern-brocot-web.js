@@ -7,14 +7,16 @@
 
 import { Fraction, R } from "@ratmath/core";
 import { formatScientific } from "ratcalc/session";
+import { Integer } from "@ratmath/core";
+import { evaluateExpression } from "./named-functions.js";
+import { FunctionsPanel } from "./functions-panel.js";
 
 /**
- * Evaluate an R expression exactly, inserting value wherever x appears:
- * "x^2 - 2" becomes R`${value}^2 - 2`.
+ * Evaluate an expression exactly at x = value: Core R syntax plus the
+ * variables x and d (depth) and named functions (see named-functions.js).
  */
-export function evaluateAt(expression, value) {
-  const pieces = expression.split(/\bx\b/);
-  return R(pieces, ...pieces.slice(1).map(() => value));
+export function evaluateAt(expression, value, { depth = 0, functions = null } = {}) {
+  return evaluateExpression(expression, { vars: { x: value, d: new Integer(depth) }, functions });
 }
 
 /** Read a jump target such as 3/4, 0.75, 1..2/3, 0.#3 or 3.~7~15 as a Fraction. */
@@ -40,6 +42,15 @@ class SternBrocotTreeVisualizer {
     this.treeContainer = null; // SVG group for tree content
 
     this.initializeElements();
+    const panelRoot = document.getElementById("functionsPanel");
+    if (panelRoot) {
+      if (window.innerWidth <= 768) document.getElementById("functionsDetails")?.removeAttribute("open");
+      this.functionsPanel = new FunctionsPanel(panelRoot, {
+        context: () => this.functionContext(),
+        format: (value) => this.formatFunctionValue(value).replace(/<[^>]*>/g, ""),
+        onChange: () => this.updateExpressionResult(),
+      });
+    }
     this.setupEventListeners();
     this.setupTooltips();
     this.loadFromURL(); // Check for URL hash
@@ -1862,7 +1873,25 @@ class SternBrocotTreeVisualizer {
     }
   }
 
+  /** x, d and the named functions at the current node. */
+  functionContext() {
+    const depth = this.currentFraction.sternBrocotDepth();
+    return {
+      vars: { x: this.currentFraction.toRational(), d: new Integer(Number.isFinite(depth) ? depth : 0) },
+      functions: this.functionsPanel ? this.functionsPanel.map() : null,
+    };
+  }
+
+  /** Display text for a function value: intervals as [low, high]. */
+  formatFunctionValue(value) {
+    if (value?.low && value?.high) {
+      return `[${this.formatRationalByMode(value.low, this.expressionDisplayMode)}, ${this.formatRationalByMode(value.high, this.expressionDisplayMode)}]`;
+    }
+    return this.formatRationalByMode(value.toRational ? value.toRational() : value, this.expressionDisplayMode);
+  }
+
   updateExpressionResult() {
+    this.functionsPanel?.refresh();
     const expression = this.elements.expressionInput.value.trim();
 
     if (!expression) {
@@ -1871,7 +1900,8 @@ class SternBrocotTreeVisualizer {
     }
 
     try {
-      const result = evaluateAt(expression, this.currentFraction.toRational());
+      const { vars, functions } = this.functionContext();
+      const result = evaluateAt(expression, vars.x, { depth: Number(vars.d.value), functions });
 
       // Convert result to a displayable format using the selected mode
       let resultText;
@@ -1945,6 +1975,17 @@ class SternBrocotTreeVisualizer {
 
   showHelpModal() {
     this.elements.helpContent.innerHTML = `
+      <h3>Expressions and Named Functions</h3>
+      <p>The expression box evaluates exactly at the current node: <code>x</code> is the node's value and <code>d</code> its depth. Literals use RiX spelling (<code>3/4</code>, <code>0.#3</code>, <code>2.5_^-2</code>, <code>1:2</code>); operators are <code>+ - * / ^ ! :</code>.</p>
+      <ul>
+        <li>The <strong>Functions</strong> panel (below Help) defines capitalised functions. <code>F</code> alone means <code>F(x)</code>; <code>F(expr)</code> evaluates <code>expr</code> and applies <code>F</code>; calls nest: <code>F(G(x) + 1)</code>.</li>
+        <li><strong>Formula</strong>: a rational expression in <code>x</code>, e.g. <code>x^2 - 2</code>.</li>
+        <li><strong>Taylor</strong>: <code>term(x, n)</code> is summed for <code>n = 0..N</code>; <code>N</code> is a number or a formula in <code>d</code> (<code>5*d</code> gives N = 15 at depth 3). The <code>error(x, n)</code> formula, evaluated at <code>n = N</code>, bounds the remainder; the result is the exact sum ± that bound, an interval. A domain such as <code>-1:1</code> says where the bound holds; x outside it is an error.</li>
+        <li>Intervals propagate exactly through interval arithmetic: <code>EXP(0:1)</code> encloses e<sup>x</sup> on [0, 1] (alternating series give wide but valid enclosures).</li>
+        <li><strong>Predefined</strong> adds editable definitions with checked remainder bounds: e<sup>x</sup>, sin, cos (all x), ln(1+x), 1/(1−x), √(1+x) (|x| &lt; 1), arctan (|x| ≤ 1), and the formulas x², 1/x.</li>
+        <li>Built-ins for bounds: <code>ABS</code>, <code>FLOOR</code>, <code>CEIL</code>, <code>MIN</code>, <code>MAX</code>, <code>BINOM(a, k)</code>.</li>
+      </ul>
+
       <h3>What is the Stern-Brocot Tree?</h3>
       <p>The Stern-Brocot tree is a beautiful mathematical structure that organizes all rational numbers (fractions) in a binary tree format. Every rational number appears exactly once in the tree, and it's built using a simple but elegant process called the <strong>mediant operation</strong>.</p>
 
