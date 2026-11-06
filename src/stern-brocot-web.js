@@ -10,6 +10,7 @@ import { formatScientific } from "ratcalc/session";
 import { Integer } from "@ratmath/core";
 import { evaluateExpression } from "./named-functions.js";
 import { FunctionsPanel } from "./functions-panel.js";
+import { allFormats, boundedDecimal, compact } from "./compact-display.js";
 
 /**
  * Evaluate an expression exactly at x = value: Core R syntax plus the
@@ -47,7 +48,7 @@ class SternBrocotTreeVisualizer {
       if (window.innerWidth <= 768) document.getElementById("functionsDetails")?.removeAttribute("open");
       this.functionsPanel = new FunctionsPanel(panelRoot, {
         context: () => this.functionContext(),
-        format: (value) => this.formatFunctionValue(value).replace(/<[^>]*>/g, ""),
+        show: (element, value) => this.showValue(element, value),
         onChange: () => this.updateExpressionResult(),
       });
     }
@@ -84,6 +85,9 @@ class SternBrocotTreeVisualizer {
       closeFarey: document.getElementById("closeFarey"),
       helpBtn: document.getElementById("helpBtn"),
       helpModal: document.getElementById("helpModal"),
+      valueModal: document.getElementById("valueModal"),
+      valueContent: document.getElementById("valueContent"),
+      closeValue: document.getElementById("closeValue"),
       helpContent: document.getElementById("helpContent"),
       closeHelp: document.getElementById("closeHelp"),
       fractionTooltip: document.getElementById("fractionTooltip"),
@@ -205,6 +209,7 @@ class SternBrocotTreeVisualizer {
     this.elements.closeHelp.addEventListener("click", () =>
       this.closeModal("help"),
     );
+    this.elements.closeValue?.addEventListener("click", () => this.closeModal("value"));
 
     // Close modals when clicking outside
     window.addEventListener("click", (e) => {
@@ -212,6 +217,7 @@ class SternBrocotTreeVisualizer {
         this.closeModal("convergents");
       if (e.target === this.elements.fareyModal) this.closeModal("farey");
       if (e.target === this.elements.helpModal) this.closeModal("help");
+      if (e.target === this.elements.valueModal) this.closeModal("value");
     });
 
     // Close modals with Escape key
@@ -220,6 +226,7 @@ class SternBrocotTreeVisualizer {
         this.closeModal("convergents");
         this.closeModal("farey");
         this.closeModal("help");
+        this.closeModal("value");
       }
     });
 
@@ -493,11 +500,7 @@ class SternBrocotTreeVisualizer {
     // Update decimal value with repeating decimal format
     try {
       const rational = this.currentFraction.toRational();
-      const decimalInfo = rational.toRepeatingDecimalWithPeriod(true);
-      const decimalDisplay =
-        decimalInfo.period > 0
-          ? `${decimalInfo.decimal} (p:${decimalInfo.period})`
-          : decimalInfo.decimal;
+      const decimalDisplay = this.decimalWithPeriod(rational);
       this.elements.decimalValue.textContent = decimalDisplay;
     } catch (e) {
       this.elements.decimalValue.textContent = (
@@ -1639,12 +1642,7 @@ class SternBrocotTreeVisualizer {
 
         // Use repeating decimal with period info
         const convergentRational = convergentFraction.toRational();
-        const decimalInfo =
-          convergentRational.toRepeatingDecimalWithPeriod(true);
-        const decimalDisplay =
-          decimalInfo.period > 0
-            ? `${decimalInfo.decimal} (p:${decimalInfo.period})`
-            : decimalInfo.decimal;
+        const decimalDisplay = this.decimalWithPeriod(convergentRational);
 
         // Calculate exact fractional distance
         const targetRational = this.currentFraction.toRational();
@@ -1856,8 +1854,7 @@ class SternBrocotTreeVisualizer {
         case 'fraction':
           return rational.toString();
         case 'decimal':
-          const decimalInfo = rational.toRepeatingDecimalWithPeriod(true);
-          return decimalInfo.decimal;
+          return boundedDecimal(rational, 30);
         case 'scientific':
           return formatScientific(rational, 6);
         case 'cf':
@@ -1890,11 +1887,64 @@ class SternBrocotTreeVisualizer {
     return this.formatRationalByMode(value.toRational ? value.toRational() : value, this.expressionDisplayMode);
   }
 
+  /** Repeating decimal with its period for moderate denominators; bounded otherwise. */
+  decimalWithPeriod(rational) {
+    if (rational.denominator <= 100000n) {
+      const info = rational.toRepeatingDecimalWithPeriod(true);
+      return info.period > 0 ? `${info.decimal} (p:${info.period})` : info.decimal;
+    }
+    return boundedDecimal(rational, 30);
+  }
+
+  /** Short text for a value in element; click opens the full exact value. */
+  showValue(element, value) {
+    const { text, shortened } = compact(value, (item) => this.formatFunctionValue(item));
+    element.textContent = text;
+    element.classList.add("value-link");
+    element.title = shortened ? "Shortened; click for the full exact value" : "Click for all exact formats";
+    element.onclick = () => this.openValueModal(value);
+  }
+
+  openValueModal(value) {
+    const content = this.elements.valueContent;
+    content.replaceChildren();
+    for (const [label, text] of allFormats(value)) {
+      const row = document.createElement("div");
+      row.className = "value-row";
+      const head = document.createElement("div");
+      head.className = "value-row-head";
+      const name = document.createElement("strong");
+      name.textContent = label;
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "value-copy";
+      copy.textContent = "Copy";
+      copy.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          copy.textContent = "Copied";
+        } catch {
+          copy.textContent = "Copy failed";
+        }
+        setTimeout(() => { copy.textContent = "Copy"; }, 1200);
+      });
+      head.append(name, copy);
+      const body = document.createElement("pre");
+      body.className = "value-text";
+      body.textContent = text;
+      row.append(head, body);
+      content.append(row);
+    }
+    this.elements.valueModal.style.display = "block";
+  }
+
   updateExpressionResult() {
     this.functionsPanel?.refresh();
     const expression = this.elements.expressionInput.value.trim();
 
     if (!expression) {
+      this.elements.expressionResult.onclick = null;
+      this.elements.expressionResult.classList.remove("value-link");
       this.elements.expressionResult.textContent = "Enter an expression above";
       return;
     }
@@ -1903,29 +1953,10 @@ class SternBrocotTreeVisualizer {
       const { vars, functions } = this.functionContext();
       const result = evaluateAt(expression, vars.x, { depth: Number(vars.d.value), functions });
 
-      // Convert result to a displayable format using the selected mode
-      let resultText;
-
-      // Check if result is a RationalInterval
-      if (result.low && result.high) {
-        // It's a RationalInterval
-        const lowerText = this.formatRationalByMode(result.low, this.expressionDisplayMode);
-        const upperText = this.formatRationalByMode(result.high, this.expressionDisplayMode);
-        resultText = `[${lowerText}, ${upperText}]`;
-      } else {
-        // It's a Rational or something with toRational
-        let rational;
-        if (result.toRational) {
-          rational = result.toRational();
-        } else {
-          rational = result;
-        }
-
-        resultText = this.formatRationalByMode(rational, this.expressionDisplayMode);
-      }
-
-      this.elements.expressionResult.innerHTML = resultText;
+      this.showValue(this.elements.expressionResult, result);
     } catch (error) {
+      this.elements.expressionResult.onclick = null;
+      this.elements.expressionResult.classList.remove("value-link");
       this.elements.expressionResult.textContent = `Error: ${error.message}`;
     }
   }
@@ -2102,6 +2133,8 @@ class SternBrocotTreeVisualizer {
       this.elements.fareyModal.style.display = "none";
     } else if (type === "help") {
       this.elements.helpModal.style.display = "none";
+    } else if (type === "value" && this.elements.valueModal) {
+      this.elements.valueModal.style.display = "none";
     }
   }
 }

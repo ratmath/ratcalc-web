@@ -10,8 +10,29 @@ import { RationalInterval } from "@ratmath/core";
 import { createSession, HELP_TEXT } from "ratcalc/session";
 import { IntervalVisualization } from "./IntervalVisualization.js";
 
+const DRAFTS_KEY = "ratcalc.drafts.v1";
+export const MAX_DRAFTS = 20;
+
+/** Saved drafts (strings), or [] when storage is missing or unreadable. */
+export function loadDrafts(storage) {
+  try {
+    const parsed = JSON.parse(storage?.getItem(DRAFTS_KEY) ?? "[]");
+    return Array.isArray(parsed) ? [...new Set(parsed.filter((item) => typeof item === "string" && item.trim()))].slice(0, MAX_DRAFTS) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveDrafts(storage, drafts) {
+  try {
+    storage?.setItem(DRAFTS_KEY, JSON.stringify(drafts));
+  } catch {
+    // Storage blocked: drafts last for this visit only.
+  }
+}
+
 export class WebCalculator {
-  constructor(root = document) {
+  constructor(root = document, storage = globalThis.localStorage) {
     this.root = root;
     this.history = [];
     this.historyIndex = -1;
@@ -19,9 +40,12 @@ export class WebCalculator {
     this.mobileInput = "";
     this.visualization = null;
     this.session = createSession({ onClear: () => this.clearOutput() });
+    this.drafts = loadDrafts(storage);
+    this.storage = storage;
     this.elements();
     this.listen();
     this.displayWelcome();
+    this.renderDrafts();
   }
 
   $(id) {
@@ -40,10 +64,17 @@ export class WebCalculator {
     this.visualizationContainer = this.$("visualizationContainer");
     this.stepSizeInput = this.$("stepSizeInput");
     this.saveButton = this.$("saveComputationBtn");
+    this.draftsBar = this.$("draftsBar");
+    this.draftsToggle = this.$("draftsToggle");
+    this.draftsList = this.$("draftsList");
   }
 
   listen() {
     this.input.addEventListener("keydown", (event) => this.handleKeyDown(event));
+    this.$("clearInput")?.addEventListener("click", () => this.clearInput());
+    this.draftsToggle?.addEventListener("click", () => {
+      if (this.draftsList) this.draftsList.hidden = !this.draftsList.hidden;
+    });
     this.copyButton.addEventListener("click", () => this.copySession());
     this.$("helpButton").addEventListener("click", () => this.showHelp());
     this.$("clearButton").addEventListener("click", () => this.run("clear()"));
@@ -92,6 +123,66 @@ export class WebCalculator {
     this.setInput(this.history[this.historyIndex]);
   }
 
+  /** Put an earlier line in the input; anything typed there moves to Drafts. */
+  recall(source) {
+    this.setAside(this.currentInput());
+    this.setInput(source);
+  }
+
+  /** Clear the input, keeping its text in Drafts. */
+  clearInput() {
+    this.setAside(this.currentInput());
+    this.setInput("");
+  }
+
+  setAside(text) {
+    const draft = String(text ?? "").trim();
+    if (!draft) return;
+    this.drafts = [draft, ...this.drafts.filter((item) => item !== draft)].slice(0, MAX_DRAFTS);
+    saveDrafts(this.storage, this.drafts);
+    this.renderDrafts();
+  }
+
+  /** Bring a draft back; the current input (if any) takes its place in Drafts. */
+  restoreDraft(draft) {
+    this.drafts = this.drafts.filter((item) => item !== draft);
+    const current = this.currentInput().trim();
+    if (current && current !== draft) this.drafts.unshift(current);
+    saveDrafts(this.storage, this.drafts);
+    this.renderDrafts();
+    this.setInput(draft);
+  }
+
+  removeDraft(draft) {
+    this.drafts = this.drafts.filter((item) => item !== draft);
+    saveDrafts(this.storage, this.drafts);
+    this.renderDrafts();
+  }
+
+  renderDrafts() {
+    if (!this.draftsBar || !this.draftsList) return;
+    this.draftsBar.hidden = this.drafts.length === 0;
+    if (this.draftsToggle) this.draftsToggle.textContent = `Drafts (${this.drafts.length})`;
+    this.draftsList.replaceChildren?.();
+    for (const draft of this.drafts) {
+      const item = document.createElement("li");
+      const restore = document.createElement("button");
+      restore.type = "button";
+      restore.className = "draft-restore";
+      restore.textContent = draft;
+      restore.title = "Put this back in the input";
+      restore.addEventListener("click", () => this.restoreDraft(draft));
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "draft-remove";
+      remove.textContent = "×";
+      remove.title = "Discard this draft";
+      remove.addEventListener("click", () => this.removeDraft(draft));
+      item.append?.(restore, remove);
+      this.draftsList.appendChild(item);
+    }
+  }
+
   currentInput() {
     return this.isMobile() ? this.mobileInput : this.input.value;
   }
@@ -134,7 +225,7 @@ export class WebCalculator {
     inputLine.className = "input-line";
     inputLine.innerHTML = '<span class="prompt">></span><span class="input-text"></span><span class="reload-icon" title="Reload expression">↻</span>';
     inputLine.querySelector(".input-text").textContent = source;
-    inputLine.addEventListener("click", () => this.setInput(source));
+    inputLine.addEventListener("click", () => this.recall(source));
     entry.appendChild(inputLine);
 
     const outputLine = document.createElement("div");
@@ -157,7 +248,7 @@ export class WebCalculator {
         viz.textContent = "📊";
         viz.addEventListener("click", (event) => {
           event.stopPropagation();
-          this.showVisualization(result.value, source);
+          this.showVisualization(result.value);
         });
         outputLine.appendChild(viz);
       }
@@ -209,7 +300,7 @@ export class WebCalculator {
     }
     const actions = {
       backspace: () => this.backspace(),
-      clear: () => this.setInput(""),
+      clear: () => this.clearInput(),
       enter: () => this.submit(),
       help: () => this.showHelp(),
       command: () => this.commandPanel.classList.add("show"),
@@ -285,14 +376,15 @@ export class WebCalculator {
     setTimeout(() => { this.copyButton.textContent = label; }, 1500);
   }
 
-  showVisualization(interval, label) {
+  showVisualization(interval) {
     this.visualizationContainer.innerHTML = "";
     this.visualization?.destroy?.();
     this.visualization = new IntervalVisualization(this.visualizationContainer, {
       width: this.visualizationContainer.clientWidth || Math.min(window.innerWidth - 100, 800),
       height: 200,
     });
-    this.visualization.addInterval(interval, { label: label.length <= 24 ? label : "Interval", color: "#2563eb", draggable: true });
+    // No expression label: the endpoints can be dragged, so the label shows them.
+    this.visualization.addInterval(interval, { label: "", color: "#2563eb", draggable: true });
     this.updateStepSize();
     this.visualizationModal.style.display = "block";
   }

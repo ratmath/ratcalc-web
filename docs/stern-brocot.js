@@ -6104,10 +6104,12 @@ function saveDefinitions(storage, definitions) {
 }
 
 class FunctionsPanel {
-  constructor(root, { context, format = String, onChange = () => {}, storage = globalThis.localStorage } = {}) {
+  constructor(root, { context, show = (element, value) => {
+    element.textContent = String(value);
+  }, onChange = () => {}, storage = globalThis.localStorage } = {}) {
     this.root = root;
     this.context = context;
-    this.format = format;
+    this.show = show;
     this.onChange = onChange;
     this.storage = storage;
     this.definitions = loadDefinitions(storage);
@@ -6163,11 +6165,9 @@ class FunctionsPanel {
   status(definition) {
     try {
       const context = { ...this.context(), functions: this.map() };
-      const parts = [];
-      if (definition.kind === "taylor")
-        parts.push(`N = ${termCount(definition, context)} at depth ${context.vars.d}`);
-      parts.push(`${definition.name}(x) = ${this.format(applyFunction(definition, context.vars.x, { ...context, name: definition.name }))}`);
-      return { ok: true, text: parts.join(" · ") };
+      const prefix = definition.kind === "taylor" ? `N = ${termCount(definition, context)} at depth ${context.vars.d} · ` : "";
+      const value = applyFunction(definition, context.vars.x, { ...context, name: definition.name });
+      return { ok: true, prefix: `${prefix}${definition.name}(x) = `, value };
     } catch (error) {
       return { ok: false, text: error.message };
     }
@@ -6178,9 +6178,15 @@ class FunctionsPanel {
       const line = card.querySelector(".fn-status");
       if (!definition || !line)
         continue;
-      const { ok, text } = this.status(definition);
-      line.textContent = text;
-      line.classList.toggle("fn-error", !ok);
+      const status = this.status(definition);
+      line.classList.toggle("fn-error", !status.ok);
+      if (!status.ok) {
+        line.textContent = status.text;
+        continue;
+      }
+      const valueSpan = this.element("span", "fn-value");
+      line.replaceChildren(status.prefix, valueSpan);
+      this.show(valueSpan, status.value);
     }
   }
   element(tag, className, text) {
@@ -6280,6 +6286,83 @@ class FunctionsPanel {
   }
 }
 
+// src/compact-display.js
+var LONG_TEXT = 40;
+var PERIOD_SEARCH_DENOMINATOR = 100000n;
+var asRational4 = (value) => value instanceof Integer ? value.toRational() : value;
+function terminates(denominator) {
+  let rest = denominator;
+  while (rest % 2n === 0n)
+    rest /= 2n;
+  while (rest % 5n === 0n)
+    rest /= 5n;
+  return rest === 1n;
+}
+function boundedDecimal(value, digits = 30) {
+  const rational = asRational4(value);
+  if (rational.denominator === 1n)
+    return rational.numerator.toString();
+  if (rational.denominator <= PERIOD_SEARCH_DENOMINATOR) {
+    const result = rational.toRepeatingDecimalWithPeriod({ limit: digits, onLimit: "trunc" });
+    return String(result.decimal).replace(/#0$/, "");
+  }
+  const text = rational.toDecimal(digits);
+  return terminates(rational.denominator) && text.split(".")[1]?.length < digits ? text : `${text}…`;
+}
+function directedScientific(value, significant, direction) {
+  const rational = asRational4(value);
+  if (rational.numerator === 0n)
+    return "0";
+  const ten = new Rational(10);
+  const magnitude = rational.abs();
+  let exponent = magnitude.numerator.toString().length - magnitude.denominator.toString().length;
+  while (magnitude.lessThan(ten.pow(exponent)))
+    exponent -= 1;
+  while (!magnitude.lessThan(ten.pow(exponent + 1)))
+    exponent += 1;
+  const scaled = rational.divide(ten.pow(exponent - significant + 1));
+  const units = direction === "down" ? scaled.floor() : scaled.ceil();
+  const negative = units < 0n;
+  const text = (negative ? -units : units).toString();
+  const shift = exponent + (text.length - significant);
+  const mantissa = text.length > 1 ? `${text[0]}.${text.slice(1)}`.replace(/\.?0+$/, "") : text;
+  return `${negative ? "-" : ""}${mantissa}${shift === 0 ? "" : `_^${shift}`}`;
+}
+function compact(value, format, significant = 15) {
+  const full = format(value);
+  if (full.length <= LONG_TEXT)
+    return { text: full, shortened: false };
+  if (value instanceof RationalInterval) {
+    return {
+      text: `[${directedScientific(value.low, significant, "down")}, ${directedScientific(value.high, significant, "up")}]`,
+      shortened: true
+    };
+  }
+  const rational = asRational4(value);
+  if (rational instanceof Rational)
+    return { text: formatScientific(rational, significant), shortened: true };
+  return { text: `${full.slice(0, LONG_TEXT)}…`, shortened: true };
+}
+function allFormats(value) {
+  if (value instanceof RationalInterval) {
+    return [
+      ["Interval", `${value.low}:${value.high}`],
+      ["Low (decimal)", boundedDecimal(value.low, 60)],
+      ["High (decimal)", boundedDecimal(value.high, 60)],
+      ["Width", String(value.high.subtract(value.low))],
+      ["Enclosing scientific", `[${directedScientific(value.low, 20, "down")}, ${directedScientific(value.high, 20, "up")}]`]
+    ];
+  }
+  const rational = asRational4(value);
+  return [
+    ["Fraction", rational.toString()],
+    ["Mixed", rational.toMixedString()],
+    ["Decimal", boundedDecimal(rational, 60)],
+    ["Scientific", formatScientific(rational, 20)],
+    ["Continued fraction", rational.toContinuedFractionString()]
+  ];
+}
+
 // src/stern-brocot-web.js
 function evaluateAt(expression, value, { depth = 0, functions = null } = {}) {
   return evaluateExpression(expression, { vars: { x: value, d: new Integer(depth) }, functions });
@@ -6311,7 +6394,7 @@ class SternBrocotTreeVisualizer {
         document.getElementById("functionsDetails")?.removeAttribute("open");
       this.functionsPanel = new FunctionsPanel(panelRoot, {
         context: () => this.functionContext(),
-        format: (value) => this.formatFunctionValue(value).replace(/<[^>]*>/g, ""),
+        show: (element, value) => this.showValue(element, value),
         onChange: () => this.updateExpressionResult()
       });
     }
@@ -6346,6 +6429,9 @@ class SternBrocotTreeVisualizer {
       closeFarey: document.getElementById("closeFarey"),
       helpBtn: document.getElementById("helpBtn"),
       helpModal: document.getElementById("helpModal"),
+      valueModal: document.getElementById("valueModal"),
+      valueContent: document.getElementById("valueContent"),
+      closeValue: document.getElementById("closeValue"),
       helpContent: document.getElementById("helpContent"),
       closeHelp: document.getElementById("closeHelp"),
       fractionTooltip: document.getElementById("fractionTooltip"),
@@ -6410,6 +6496,7 @@ class SternBrocotTreeVisualizer {
     this.elements.closeConvergents.addEventListener("click", () => this.closeModal("convergents"));
     this.elements.closeFarey.addEventListener("click", () => this.closeModal("farey"));
     this.elements.closeHelp.addEventListener("click", () => this.closeModal("help"));
+    this.elements.closeValue?.addEventListener("click", () => this.closeModal("value"));
     window.addEventListener("click", (e) => {
       if (e.target === this.elements.convergentsModal)
         this.closeModal("convergents");
@@ -6417,12 +6504,15 @@ class SternBrocotTreeVisualizer {
         this.closeModal("farey");
       if (e.target === this.elements.helpModal)
         this.closeModal("help");
+      if (e.target === this.elements.valueModal)
+        this.closeModal("value");
     });
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
         this.closeModal("convergents");
         this.closeModal("farey");
         this.closeModal("help");
+        this.closeModal("value");
       }
     });
     window.addEventListener("popstate", (e) => {
@@ -6604,8 +6694,7 @@ class SternBrocotTreeVisualizer {
     this.updateBoundaryDisplay();
     try {
       const rational = this.currentFraction.toRational();
-      const decimalInfo = rational.toRepeatingDecimalWithPeriod(true);
-      const decimalDisplay = decimalInfo.period > 0 ? `${decimalInfo.decimal} (p:${decimalInfo.period})` : decimalInfo.decimal;
+      const decimalDisplay = this.decimalWithPeriod(rational);
       this.elements.decimalValue.textContent = decimalDisplay;
     } catch (e) {
       this.elements.decimalValue.textContent = (Number(this.currentFraction.numerator) / Number(this.currentFraction.denominator)).toFixed(6);
@@ -7383,8 +7472,7 @@ class SternBrocotTreeVisualizer {
         const convergentStr = this.formatFraction(convergentFraction, "fraction");
         const isCurrent = convergentStr === currentFractionStr;
         const convergentRational = convergentFraction.toRational();
-        const decimalInfo = convergentRational.toRepeatingDecimalWithPeriod(true);
-        const decimalDisplay = decimalInfo.period > 0 ? `${decimalInfo.decimal} (p:${decimalInfo.period})` : decimalInfo.decimal;
+        const decimalDisplay = this.decimalWithPeriod(convergentRational);
         const targetRational = this.currentFraction.toRational();
         const exactDistance = targetRational.subtract(convergentRational).abs();
         const distanceScientific = formatScientific(exactDistance, 4);
@@ -7552,8 +7640,7 @@ class SternBrocotTreeVisualizer {
         case "fraction":
           return rational.toString();
         case "decimal":
-          const decimalInfo = rational.toRepeatingDecimalWithPeriod(true);
-          return decimalInfo.decimal;
+          return boundedDecimal(rational, 30);
         case "scientific":
           return formatScientific(rational, 6);
         case "cf":
@@ -7581,32 +7668,70 @@ class SternBrocotTreeVisualizer {
     }
     return this.formatRationalByMode(value.toRational ? value.toRational() : value, this.expressionDisplayMode);
   }
+  decimalWithPeriod(rational) {
+    if (rational.denominator <= 100000n) {
+      const info = rational.toRepeatingDecimalWithPeriod(true);
+      return info.period > 0 ? `${info.decimal} (p:${info.period})` : info.decimal;
+    }
+    return boundedDecimal(rational, 30);
+  }
+  showValue(element, value) {
+    const { text, shortened } = compact(value, (item) => this.formatFunctionValue(item));
+    element.textContent = text;
+    element.classList.add("value-link");
+    element.title = shortened ? "Shortened; click for the full exact value" : "Click for all exact formats";
+    element.onclick = () => this.openValueModal(value);
+  }
+  openValueModal(value) {
+    const content = this.elements.valueContent;
+    content.replaceChildren();
+    for (const [label, text] of allFormats(value)) {
+      const row = document.createElement("div");
+      row.className = "value-row";
+      const head = document.createElement("div");
+      head.className = "value-row-head";
+      const name = document.createElement("strong");
+      name.textContent = label;
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "value-copy";
+      copy.textContent = "Copy";
+      copy.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          copy.textContent = "Copied";
+        } catch {
+          copy.textContent = "Copy failed";
+        }
+        setTimeout(() => {
+          copy.textContent = "Copy";
+        }, 1200);
+      });
+      head.append(name, copy);
+      const body = document.createElement("pre");
+      body.className = "value-text";
+      body.textContent = text;
+      row.append(head, body);
+      content.append(row);
+    }
+    this.elements.valueModal.style.display = "block";
+  }
   updateExpressionResult() {
     this.functionsPanel?.refresh();
     const expression = this.elements.expressionInput.value.trim();
     if (!expression) {
+      this.elements.expressionResult.onclick = null;
+      this.elements.expressionResult.classList.remove("value-link");
       this.elements.expressionResult.textContent = "Enter an expression above";
       return;
     }
     try {
       const { vars, functions } = this.functionContext();
       const result = evaluateAt(expression, vars.x, { depth: Number(vars.d.value), functions });
-      let resultText;
-      if (result.low && result.high) {
-        const lowerText = this.formatRationalByMode(result.low, this.expressionDisplayMode);
-        const upperText = this.formatRationalByMode(result.high, this.expressionDisplayMode);
-        resultText = `[${lowerText}, ${upperText}]`;
-      } else {
-        let rational;
-        if (result.toRational) {
-          rational = result.toRational();
-        } else {
-          rational = result;
-        }
-        resultText = this.formatRationalByMode(rational, this.expressionDisplayMode);
-      }
-      this.elements.expressionResult.innerHTML = resultText;
+      this.showValue(this.elements.expressionResult, result);
     } catch (error) {
+      this.elements.expressionResult.onclick = null;
+      this.elements.expressionResult.classList.remove("value-link");
       this.elements.expressionResult.textContent = `Error: ${error.message}`;
     }
   }
@@ -7758,6 +7883,8 @@ class SternBrocotTreeVisualizer {
       this.elements.fareyModal.style.display = "none";
     } else if (type === "help") {
       this.elements.helpModal.style.display = "none";
+    } else if (type === "value" && this.elements.valueModal) {
+      this.elements.valueModal.style.display = "none";
     }
   }
 }

@@ -1083,3 +1083,56 @@ header p {
 .fn-status.fn-error {
     color: #c0392b;
 }
+
+/* Long values: never widen the layout; click for the full exact value. */
+.main-content > * {
+    min-width: 0;
+}
+
+#expressionResult,
+.fn-status,
+#decimalValue,
+.info-item span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.value-link {
+    cursor: pointer;
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
+}
+
+.value-row {
+    margin-bottom: 0.9rem;
+}
+
+.value-row-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.25rem;
+}
+
+.value-copy {
+    font: inherit;
+    font-size: 0.8rem;
+    padding: 0.15rem 0.6rem;
+    border: 1px solid #bdc3c7;
+    border-radius: 4px;
+    background: white;
+    cursor: pointer;
+}
+
+.value-text {
+    margin: 0;
+    padding: 0.5rem;
+    background: #f8f9fa;
+    border-radius: 4px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 12rem;
+    overflow-y: auto;
+    font-size: 0.8rem;
+}

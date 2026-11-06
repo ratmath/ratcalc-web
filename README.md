@@ -27,13 +27,17 @@ literals, and Core results are shown exactly.
 - Literals inside ``R`…` `` use RiX's spelling: `3.~7~15~1`, `2.5_^-2` (no `E`),
   `0xff.8`, `1.2[3:6]`; ``R.base(16)`ff.8` `` reads another base.
 - `sum`, `product`, `seq`, `range` replace the old `SUM`/`PROD`/`SEQ`.
+- Clicking an earlier line recalls it; anything already typed moves to
+  **Drafts** (deduplicated, up to 20, saved in the browser) and comes back with
+  one click. The × in the input clears it the same way.
 - `display("both" | "exact" | "decimal" | "mixed" | "cf" | "sci")`, `digits(n)`,
   `sciDigits(n)`, an output base with `hex()`/`bin()`/`oct()`/`base(n)`/`dec()`,
   one-value formatters `hex(x)`, `cf(x)`, `mix(x)`, `deci(x)`, `sci(x)`,
   `inBase(x, n)`, and `help(x)` for a value's methods; `vars()`, `clear()`,
   `help()`, `ans`; click a result to reuse it as ``R`…` ``. The full mapping
   from old commands is in [`apps/calc`](../calc/README.md#from-the-old-calculator).
-- Interval results have a 📊 visualization (drag endpoints, export SVG/HTML).
+- Interval results have a 📊 visualization (drag endpoints, export SVG/HTML);
+  its label shows the current endpoints, not the original expression.
 - The phone layout has a keypad with `R`, backtick and `${` keys and a command
   panel for the display modes.
 - Sandboxing: `calc.html` sets a Content-Security-Policy with
@@ -74,6 +78,13 @@ UI in `src/functions-panel.js`, saved in `localStorage`):
   arctan (|x| ≤ 1), x², 1/x — editable after insertion.
 - Built-ins for bounds: `ABS`, `FLOOR`, `CEIL`, `MIN`, `MAX`, `BINOM(a, k)`.
   Interval arguments propagate by interval arithmetic (valid, sometimes wide).
+
+**Long values.** Results longer than 40 characters are shortened: scalars to
+scientific form (… marks rounding), intervals with the low end rounded down
+and the high end rounded up so the short form still encloses the value.
+Clicking any value opens a dialog with every exact format and copy buttons.
+Decimal display never searches for long repeating periods: denominators above
+100000 show a truncated decimal marked with … (`src/compact-display.js`).
 
 ## Building and testing
 

@@ -29,10 +29,16 @@
     <div class="calculator">
       <div class="output-history" id="outputHistory"></div>
 
+      <div id="draftsBar" class="drafts-bar" hidden>
+        <button type="button" id="draftsToggle" class="drafts-toggle" title="Inputs set aside when you recalled an earlier line">Drafts (0)</button>
+        <ul id="draftsList" class="drafts-list" hidden></ul>
+      </div>
+
       <div class="input-section">
         <div class="prompt">></div>
         <input type="text" id="calculatorInput" class="calculator-input"
           placeholder="JavaScript with R`…` exact arithmetic — help() for help" autocomplete="off" spellcheck="false">
+        <button type="button" id="clearInput" class="clear-input" title="Clear the input (it is kept in Drafts)">×</button>
       </div>
 
       <div id="mobileInputDisplay" class="mobile"></div>

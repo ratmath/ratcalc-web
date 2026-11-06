@@ -206,7 +206,8 @@ export class IntervalVisualization {
     const intervalData = {
       interval: interval,
       color: color,
-      label: options.label || `Interval ${this.intervals.length + 1}`,
+      // An empty label shows only the current endpoints, which follow drags.
+      label: options.label ?? `Interval ${this.intervals.length + 1}`,
       id: options.id || `interval_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       draggable: options.draggable !== false,
       isResult: options.isResult || false // New flag to indicate if this is a result
@@ -343,7 +344,7 @@ export class IntervalVisualization {
     labelText.setAttribute("fill", color);
     labelText.setAttribute("font-weight", "bold");
     labelText.setAttribute("class", "interval-label");
-    labelText.textContent = label;
+    labelText.textContent = label || `${interval.low.toString()}:${interval.high.toString()}`;
     intervalGroup.appendChild(labelText);
 
     // Add tooltip handlers
@@ -362,15 +363,16 @@ export class IntervalVisualization {
     const labelElement = this.svg.querySelector(`g[data-interval-id="${intervalData.id}"] .interval-label`);
     if (labelElement) {
       // Extract the original label part before the bracket
+      const range = `${intervalData.interval.low.toString()}:${intervalData.interval.high.toString()}`;
       const originalLabel = intervalData.label.split(' [')[0];
-      labelElement.textContent = `${originalLabel} [${intervalData.interval.low.toString()}:${intervalData.interval.high.toString()}]`;
+      labelElement.textContent = originalLabel ? `${originalLabel} [${range}]` : range;
     }
   }
 
   addTooltipHandlers(element, intervalData) {
     const showTooltip = (e) => {
       const { interval, label } = intervalData;
-      const content = `${label}<br/>Range: [${interval.low.toString()}, ${interval.high.toString()}]<br/>Width: ${interval.high.subtract(interval.low).toString()}`;
+      const content = `${label || "Interval"}<br/>Range: [${interval.low.toString()}, ${interval.high.toString()}]<br/>Width: ${interval.high.subtract(interval.low).toString()}`;
       this.tooltip.innerHTML = content;
       this.tooltip.style.opacity = "1";
       this.tooltip.style.left = (e.pageX + 10) + "px";

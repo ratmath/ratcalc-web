@@ -6405,7 +6405,7 @@ class IntervalVisualization {
     const intervalData = {
       interval,
       color,
-      label: options.label || `Interval ${this.intervals.length + 1}`,
+      label: options.label ?? `Interval ${this.intervals.length + 1}`,
       id: options.id || `interval_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       draggable: options.draggable !== false,
       isResult: options.isResult || false
@@ -6505,7 +6505,7 @@ class IntervalVisualization {
     labelText.setAttribute("fill", color);
     labelText.setAttribute("font-weight", "bold");
     labelText.setAttribute("class", "interval-label");
-    labelText.textContent = label;
+    labelText.textContent = label || `${interval.low.toString()}:${interval.high.toString()}`;
     intervalGroup.appendChild(labelText);
     this.addTooltipHandlers(intervalGroup, intervalData);
     if (draggable) {
@@ -6516,14 +6516,15 @@ class IntervalVisualization {
   updateIntervalLabel(intervalData) {
     const labelElement = this.svg.querySelector(`g[data-interval-id="${intervalData.id}"] .interval-label`);
     if (labelElement) {
+      const range = `${intervalData.interval.low.toString()}:${intervalData.interval.high.toString()}`;
       const originalLabel = intervalData.label.split(" [")[0];
-      labelElement.textContent = `${originalLabel} [${intervalData.interval.low.toString()}:${intervalData.interval.high.toString()}]`;
+      labelElement.textContent = originalLabel ? `${originalLabel} [${range}]` : range;
     }
   }
   addTooltipHandlers(element, intervalData) {
     const showTooltip = (e) => {
       const { interval, label } = intervalData;
-      const content = `${label}<br/>Range: [${interval.low.toString()}, ${interval.high.toString()}]<br/>Width: ${interval.high.subtract(interval.low).toString()}`;
+      const content = `${label || "Interval"}<br/>Range: [${interval.low.toString()}, ${interval.high.toString()}]<br/>Width: ${interval.high.subtract(interval.low).toString()}`;
       this.tooltip.innerHTML = content;
       this.tooltip.style.opacity = "1";
       this.tooltip.style.left = e.pageX + 10 + "px";
@@ -6917,8 +6918,24 @@ class IntervalVisualization {
 }
 
 // src/web-calc.js
+var DRAFTS_KEY = "ratcalc.drafts.v1";
+var MAX_DRAFTS = 20;
+function loadDrafts(storage) {
+  try {
+    const parsed = JSON.parse(storage?.getItem(DRAFTS_KEY) ?? "[]");
+    return Array.isArray(parsed) ? [...new Set(parsed.filter((item) => typeof item === "string" && item.trim()))].slice(0, MAX_DRAFTS) : [];
+  } catch {
+    return [];
+  }
+}
+function saveDrafts(storage, drafts) {
+  try {
+    storage?.setItem(DRAFTS_KEY, JSON.stringify(drafts));
+  } catch {}
+}
+
 class WebCalculator {
-  constructor(root = document) {
+  constructor(root = document, storage = globalThis.localStorage) {
     this.root = root;
     this.history = [];
     this.historyIndex = -1;
@@ -6926,9 +6943,12 @@ class WebCalculator {
     this.mobileInput = "";
     this.visualization = null;
     this.session = createSession({ onClear: () => this.clearOutput() });
+    this.drafts = loadDrafts(storage);
+    this.storage = storage;
     this.elements();
     this.listen();
     this.displayWelcome();
+    this.renderDrafts();
   }
   $(id) {
     return this.root.getElementById(id);
@@ -6945,9 +6965,17 @@ class WebCalculator {
     this.visualizationContainer = this.$("visualizationContainer");
     this.stepSizeInput = this.$("stepSizeInput");
     this.saveButton = this.$("saveComputationBtn");
+    this.draftsBar = this.$("draftsBar");
+    this.draftsToggle = this.$("draftsToggle");
+    this.draftsList = this.$("draftsList");
   }
   listen() {
     this.input.addEventListener("keydown", (event) => this.handleKeyDown(event));
+    this.$("clearInput")?.addEventListener("click", () => this.clearInput());
+    this.draftsToggle?.addEventListener("click", () => {
+      if (this.draftsList)
+        this.draftsList.hidden = !this.draftsList.hidden;
+    });
     this.copyButton.addEventListener("click", () => this.copySession());
     this.$("helpButton").addEventListener("click", () => this.showHelp());
     this.$("clearButton").addEventListener("click", () => this.run("clear()"));
@@ -7004,6 +7032,61 @@ class WebCalculator {
     }
     this.setInput(this.history[this.historyIndex]);
   }
+  recall(source) {
+    this.setAside(this.currentInput());
+    this.setInput(source);
+  }
+  clearInput() {
+    this.setAside(this.currentInput());
+    this.setInput("");
+  }
+  setAside(text) {
+    const draft = String(text ?? "").trim();
+    if (!draft)
+      return;
+    this.drafts = [draft, ...this.drafts.filter((item) => item !== draft)].slice(0, MAX_DRAFTS);
+    saveDrafts(this.storage, this.drafts);
+    this.renderDrafts();
+  }
+  restoreDraft(draft) {
+    this.drafts = this.drafts.filter((item) => item !== draft);
+    const current = this.currentInput().trim();
+    if (current && current !== draft)
+      this.drafts.unshift(current);
+    saveDrafts(this.storage, this.drafts);
+    this.renderDrafts();
+    this.setInput(draft);
+  }
+  removeDraft(draft) {
+    this.drafts = this.drafts.filter((item) => item !== draft);
+    saveDrafts(this.storage, this.drafts);
+    this.renderDrafts();
+  }
+  renderDrafts() {
+    if (!this.draftsBar || !this.draftsList)
+      return;
+    this.draftsBar.hidden = this.drafts.length === 0;
+    if (this.draftsToggle)
+      this.draftsToggle.textContent = `Drafts (${this.drafts.length})`;
+    this.draftsList.replaceChildren?.();
+    for (const draft of this.drafts) {
+      const item = document.createElement("li");
+      const restore = document.createElement("button");
+      restore.type = "button";
+      restore.className = "draft-restore";
+      restore.textContent = draft;
+      restore.title = "Put this back in the input";
+      restore.addEventListener("click", () => this.restoreDraft(draft));
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "draft-remove";
+      remove.textContent = "×";
+      remove.title = "Discard this draft";
+      remove.addEventListener("click", () => this.removeDraft(draft));
+      item.append?.(restore, remove);
+      this.draftsList.appendChild(item);
+    }
+  }
   currentInput() {
     return this.isMobile() ? this.mobileInput : this.input.value;
   }
@@ -7041,7 +7124,7 @@ class WebCalculator {
     inputLine.className = "input-line";
     inputLine.innerHTML = '<span class="prompt">></span><span class="input-text"></span><span class="reload-icon" title="Reload expression">↻</span>';
     inputLine.querySelector(".input-text").textContent = source;
-    inputLine.addEventListener("click", () => this.setInput(source));
+    inputLine.addEventListener("click", () => this.recall(source));
     entry.appendChild(inputLine);
     const outputLine = document.createElement("div");
     outputLine.className = result.ok ? "output-line" : "error-line";
@@ -7064,7 +7147,7 @@ class WebCalculator {
         viz.textContent = "\uD83D\uDCCA";
         viz.addEventListener("click", (event) => {
           event.stopPropagation();
-          this.showVisualization(result.value, source);
+          this.showVisualization(result.value);
         });
         outputLine.appendChild(viz);
       }
@@ -7116,7 +7199,7 @@ ${result.text}`);
     }
     const actions = {
       backspace: () => this.backspace(),
-      clear: () => this.setInput(""),
+      clear: () => this.clearInput(),
       enter: () => this.submit(),
       help: () => this.showHelp(),
       command: () => this.commandPanel.classList.add("show")
@@ -7192,14 +7275,14 @@ ${result.text}`);
       this.copyButton.textContent = label;
     }, 1500);
   }
-  showVisualization(interval, label) {
+  showVisualization(interval) {
     this.visualizationContainer.innerHTML = "";
     this.visualization?.destroy?.();
     this.visualization = new IntervalVisualization(this.visualizationContainer, {
       width: this.visualizationContainer.clientWidth || Math.min(window.innerWidth - 100, 800),
       height: 200
     });
-    this.visualization.addInterval(interval, { label: label.length <= 24 ? label : "Interval", color: "#2563eb", draggable: true });
+    this.visualization.addInterval(interval, { label: "", color: "#2563eb", draggable: true });
     this.updateStepSize();
     this.visualizationModal.style.display = "block";
   }
@@ -7234,5 +7317,8 @@ if (typeof document !== "undefined" && typeof document.getElementById === "funct
   globalThis.ratcalc = new WebCalculator(document);
 }
 export {
-  WebCalculator
+  MAX_DRAFTS,
+  WebCalculator,
+  loadDrafts,
+  saveDrafts
 };

@@ -43,13 +43,13 @@ export class FunctionsPanel {
   /**
    * @param root element to render into
    * @param options.context () => { vars: { x, d }, functions } at the current node
-   * @param options.format (value) => text for a result
+   * @param options.show (element, value) => render a value (short text, click for more)
    * @param options.onChange called after any definition changes
    */
-  constructor(root, { context, format = String, onChange = () => {}, storage = globalThis.localStorage } = {}) {
+  constructor(root, { context, show = (element, value) => { element.textContent = String(value); }, onChange = () => {}, storage = globalThis.localStorage } = {}) {
     this.root = root;
     this.context = context;
-    this.format = format;
+    this.show = show;
     this.onChange = onChange;
     this.storage = storage;
     this.definitions = loadDefinitions(storage);
@@ -110,14 +110,13 @@ export class FunctionsPanel {
     this.onChange();
   }
 
-  /** Status line for one definition at the current node. */
+  /** Status for one definition at the current node: { ok, prefix, value } or { ok: false, text }. */
   status(definition) {
     try {
       const context = { ...this.context(), functions: this.map() };
-      const parts = [];
-      if (definition.kind === "taylor") parts.push(`N = ${termCount(definition, context)} at depth ${context.vars.d}`);
-      parts.push(`${definition.name}(x) = ${this.format(applyFunction(definition, context.vars.x, { ...context, name: definition.name }))}`);
-      return { ok: true, text: parts.join(" · ") };
+      const prefix = definition.kind === "taylor" ? `N = ${termCount(definition, context)} at depth ${context.vars.d} · ` : "";
+      const value = applyFunction(definition, context.vars.x, { ...context, name: definition.name });
+      return { ok: true, prefix: `${prefix}${definition.name}(x) = `, value };
     } catch (error) {
       return { ok: false, text: error.message };
     }
@@ -129,9 +128,15 @@ export class FunctionsPanel {
       const definition = this.definitions.find((item) => item.name === card.dataset.name);
       const line = card.querySelector(".fn-status");
       if (!definition || !line) continue;
-      const { ok, text } = this.status(definition);
-      line.textContent = text;
-      line.classList.toggle("fn-error", !ok);
+      const status = this.status(definition);
+      line.classList.toggle("fn-error", !status.ok);
+      if (!status.ok) {
+        line.textContent = status.text;
+        continue;
+      }
+      const valueSpan = this.element("span", "fn-value");
+      line.replaceChildren(status.prefix, valueSpan);
+      this.show(valueSpan, status.value);
     }
   }
 
