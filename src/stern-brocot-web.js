@@ -2050,6 +2050,18 @@ class SternBrocotTreeVisualizer {
         <li>Code runs in a separate worker with no network access; anything taking over 3 seconds is stopped, and <em>Stop</em> ends it sooner. Functions are saved in this browser.</li>
       </ul>
 
+      <h3>Certified Functions (@ratmath/analytic)</h3>
+      <p>Function code can also use <code>@ratmath/analytic</code>, which proves its answers: every value is an interval guaranteed to contain the true one.</p>
+      <ul>
+        <li><code>exp</code>, <code>log</code>, <code>log1p</code>, <code>sqrt</code>, <code>sin</code>, <code>cos</code>, <code>tan</code>, <code>atan</code>, <code>sinh</code>, <code>cosh</code>, <code>tanh</code>: a number gives an interval with at least 30 correct digits (<code>return exp(x);</code>); an interval gives an enclosure of the range (<code>sin(-1:1)</code> is about ±0.8415, not the naive ±1.18). <code>pi</code> and <code>e</code> are 30-digit intervals.</li>
+        <li><code>createScope({ digits: 60 })</code> gives the same functions at another precision: <code>const A = createScope({ digits: 20 + 10 * Number(d) }); return A.sin(x);</code> adds digits as you go deeper.</li>
+        <li><code>model(t =&gt; exp(sin(t)), R\`0:1\`)</code> is a <em>Taylor model</em>: a polynomial with exact coefficients plus a certified remainder valid on all of [0, 1]. Returning a model evaluates it at <code>x</code>; it also has <code>.range()</code>, <code>.integral()</code>, <code>.integrate()</code>, <code>.describe()</code>, <code>.coefficients</code>, <code>.remainder</code>. Inside <code>t =&gt; …</code>, <code>t</code> is a model, so use methods for arithmetic: <code>t.multiply(t)</code>, <code>.add</code>, <code>.subtract</code>, <code>.divide</code>, <code>.negate</code>, <code>.pow(n)</code>.</li>
+        <li><code>integral(f, a, b, { pieces })</code> encloses ∫<sub>a</sub><sup>b</sup> f: <code>integral(t =&gt; exp(t.multiply(t).negate()), 0, x)</code>. <code>analytic.range(f, R\`0:3\`)</code> encloses the range of f (plain <code>range</code> stays Core's list maker).</li>
+        <li><code>series(domain, { coefficient: k =&gt; a_k, rule, … })</code> turns your own power series into a model; the rule bounds the tail: <code>"lagrange"</code> (with <code>M</code>), <code>"ratio"</code> (with <code>q</code>), <code>"alternating"</code> or <code>"explicit"</code> (with <code>error</code>). The library checks ratio and alternating rules on the next 32 terms and refuses if they fail.</li>
+        <li>When a hypothesis fails (log of an interval reaching 0, a point outside a model's domain) you get an error with the reason, never an unproven value.</li>
+        <li><em>Predefined… → Certified</em> has five worked examples: CEXP (e<sup>x</sup>), CSIN (more digits by depth), EMODEL (a Taylor model), ERFI (∫<sub>0</sub><sup>x</sup> e<sup>−t²</sup> dt), GSERIES (Σ (x/2)<sup>k</sup> with a ratio rule).</li>
+      </ul>
+
       <h3>What is the Stern-Brocot Tree?</h3>
       <p>The Stern-Brocot tree is a beautiful mathematical structure that organizes all rational numbers (fractions) in a binary tree format. Every rational number appears exactly once in the tree, and it's built using a simple but elegant process called the <strong>mediant operation</strong>.</p>
 
@@ -2176,7 +2188,7 @@ class SternBrocotTreeVisualizer {
 let sternBrocotApp;
 
 // Initialize the visualizer when the page loads (not when imported by tests)
-if (typeof document !== "undefined") {
+if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
   document.addEventListener("DOMContentLoaded", () => {
     sternBrocotApp = new SternBrocotTreeVisualizer();
   });

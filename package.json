@@ -14,6 +14,7 @@
         "build-ratree-worker": "bun build src/ratree-worker.js --outfile docs/ratree-worker.js --format esm --target browser"
     },
     "dependencies": {
+        "@ratmath/analytic": "workspace:*",
         "@ratmath/core": "workspace:*",
         "ratcalc": "workspace:*"
     },

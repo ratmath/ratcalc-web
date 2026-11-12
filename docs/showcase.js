@@ -5759,6 +5759,815 @@ var core_default = {
   reviveCoreValue
 };
 
+// ../../packages/analytic/src/errors.js
+class AnalyticError extends Error {
+  constructor(code, message, details = {}) {
+    super(message);
+    this.name = "AnalyticError";
+    this.code = code;
+    this.details = details;
+  }
+}
+function refuse(code, message, details) {
+  throw new AnalyticError(code, message, details);
+}
+
+// ../../packages/analytic/src/rat.js
+var ZERO2 = new Rational(0n);
+var ONE2 = new Rational(1n);
+var TWO = new Rational(2n);
+var HALF = new Rational(1n, 2n);
+function toQ(v) {
+  if (v instanceof Rational)
+    return v;
+  if (typeof v === "bigint")
+    return new Rational(v);
+  if (typeof v === "number") {
+    if (!Number.isSafeInteger(v)) {
+      refuse("not-exact", `JS number ${v} is not an exact integer; pass a Rational (R\`...\`) or a string such as "1/10"`);
+    }
+    return new Rational(BigInt(v));
+  }
+  if (typeof v === "string")
+    return Rational.from(v);
+  if (v instanceof Integer)
+    return new Rational(v.value);
+  if (v instanceof Fraction)
+    return new Rational(v.numerator, v.denominator);
+  if (v && typeof v === "object" && typeof v.numerator === "bigint" && typeof v.denominator === "bigint") {
+    return new Rational(v.numerator, v.denominator);
+  }
+  refuse("not-a-number", `expected a rational number, got ${describeValue(v)}`);
+}
+function describeValue(v) {
+  if (v === null || v === undefined)
+    return String(v);
+  if (typeof v === "object")
+    return v.constructor?.name ?? "object";
+  return `${typeof v} ${String(v)}`;
+}
+var lt = (a, b) => a.compareTo(b) < 0;
+var le = (a, b) => a.compareTo(b) <= 0;
+var gt = (a, b) => a.compareTo(b) > 0;
+var ge = (a, b) => a.compareTo(b) >= 0;
+var eq = (a, b) => a.compareTo(b) === 0;
+var min = (a, b) => le(a, b) ? a : b;
+var max = (a, b) => ge(a, b) ? a : b;
+var isZero = (a) => a.numerator === 0n;
+function floorDiv(a, b) {
+  if (a >= 0n)
+    return a / b;
+  return -((-a + b - 1n) / b);
+}
+function bitLen(n) {
+  if (n < 0n)
+    n = -n;
+  return n === 0n ? 0 : n.toString(2).length;
+}
+function log2Approx(q) {
+  if (q.numerator === 0n)
+    return -Infinity;
+  return bitLen(q.numerator) - bitLen(q.denominator);
+}
+function floorDyadic(q, bits) {
+  if (bits < 0) {
+    const s = 1n << BigInt(-bits);
+    return new Rational(floorDiv(q.numerator, q.denominator * s) * s);
+  }
+  const s = 1n << BigInt(bits);
+  return new Rational(floorDiv(q.numerator * s, q.denominator), s);
+}
+function ceilDyadic(q, bits) {
+  return floorDyadic(q.negate(), bits).negate();
+}
+function roundDyadic(q, bits) {
+  return floorDyadic(q.add(new Rational(1n, 1n << BigInt(bits + 1))), bits);
+}
+
+// ../../packages/analytic/src/interval.js
+class Iv {
+  constructor(lo, hi = lo) {
+    if (gt(lo, hi))
+      [lo, hi] = [hi, lo];
+    this.lo = lo;
+    this.hi = hi;
+  }
+  static point(q) {
+    return new Iv(q, q);
+  }
+  static sym(r) {
+    const a = r.abs();
+    return new Iv(a.negate(), a);
+  }
+  static from(v) {
+    if (v instanceof Iv)
+      return v;
+    if (v instanceof RationalInterval)
+      return new Iv(v.low, v.high);
+    if (Array.isArray(v) && v.length === 2)
+      return new Iv(toQ(v[0]), toQ(v[1]));
+    if (v && typeof v === "object" && "low" in v && "high" in v && !(v instanceof Rational)) {
+      return new Iv(toQ(v.low), toQ(v.high));
+    }
+    return Iv.point(toQ(v));
+  }
+  get isPoint() {
+    return this.lo.compareTo(this.hi) === 0;
+  }
+  get width() {
+    return this.hi.subtract(this.lo);
+  }
+  get mid() {
+    return this.lo.add(this.hi).divide(new Rational(2n));
+  }
+  get rad() {
+    return this.width.divide(new Rational(2n));
+  }
+  get mag() {
+    return max(this.lo.abs(), this.hi.abs());
+  }
+  get mig() {
+    if (le(this.lo, ZERO2) && le(ZERO2, this.hi))
+      return ZERO2;
+    return min(this.lo.abs(), this.hi.abs());
+  }
+  containsZero() {
+    return le(this.lo, ZERO2) && le(ZERO2, this.hi);
+  }
+  contains(other) {
+    const o = other instanceof Iv ? other : Iv.point(other);
+    return le(this.lo, o.lo) && le(o.hi, this.hi);
+  }
+  add(o) {
+    o = asIv(o);
+    return new Iv(this.lo.add(o.lo), this.hi.add(o.hi));
+  }
+  sub(o) {
+    o = asIv(o);
+    return new Iv(this.lo.subtract(o.hi), this.hi.subtract(o.lo));
+  }
+  neg() {
+    return new Iv(this.hi.negate(), this.lo.negate());
+  }
+  mul(o) {
+    o = asIv(o);
+    if (this.isPoint && o.isPoint)
+      return Iv.point(this.lo.multiply(o.lo));
+    const p = [this.lo.multiply(o.lo), this.lo.multiply(o.hi), this.hi.multiply(o.lo), this.hi.multiply(o.hi)];
+    let lo = p[0];
+    let hi = p[0];
+    for (const v of p) {
+      lo = min(lo, v);
+      hi = max(hi, v);
+    }
+    return new Iv(lo, hi);
+  }
+  scale(q) {
+    return new Iv(this.lo.multiply(q), this.hi.multiply(q));
+  }
+  recip() {
+    if (this.containsZero())
+      refuse("division-by-zero", `cannot take the reciprocal of an interval containing 0 (${this})`);
+    return new Iv(this.hi.reciprocal(), this.lo.reciprocal());
+  }
+  div(o) {
+    return this.mul(asIv(o).recip());
+  }
+  pow(n) {
+    if (n === 0)
+      return Iv.point(ONE2);
+    const a = this.lo.pow(n);
+    const b = this.hi.pow(n);
+    if (n % 2 === 1)
+      return new Iv(a, b);
+    if (this.containsZero())
+      return new Iv(ZERO2, max(a, b));
+    return new Iv(min(a, b), max(a, b));
+  }
+  hull(o) {
+    o = asIv(o);
+    return new Iv(min(this.lo, o.lo), max(this.hi, o.hi));
+  }
+  intersect(o) {
+    o = asIv(o);
+    const lo = max(this.lo, o.lo);
+    const hi = min(this.hi, o.hi);
+    if (gt(lo, hi))
+      return null;
+    return new Iv(lo, hi);
+  }
+  roundOut(bits, absBits = bits * 2) {
+    const m = this.mag;
+    if (m.numerator === 0n)
+      return this;
+    const e = log2Approx(m);
+    const b = Math.min(bits - e, absBits);
+    const lo = floorDyadic(this.lo, b);
+    const hi = ceilDyadic(this.hi, b);
+    return new Iv(this.lo.denominator <= lo.denominator ? this.lo : lo, this.hi.denominator <= hi.denominator ? this.hi : hi);
+  }
+  toRationalInterval() {
+    return new RationalInterval(this.lo, this.hi);
+  }
+  toString() {
+    return `[${this.lo}, ${this.hi}]`;
+  }
+}
+function asIv(v) {
+  return v instanceof Iv ? v : Iv.point(v);
+}
+var IV_ZERO = Iv.point(ZERO2);
+var IV_ONE = Iv.point(ONE2);
+
+// ../../packages/analytic/src/poly.js
+function trim(p) {
+  let n = p.length;
+  while (n > 1 && isZero(p[n - 1]))
+    n--;
+  return n === p.length ? p : p.slice(0, n);
+}
+function add(p, q) {
+  const n = Math.max(p.length, q.length);
+  const r = new Array(n);
+  for (let i = 0;i < n; i++)
+    r[i] = (p[i] ?? ZERO2).add(q[i] ?? ZERO2);
+  return trim(r);
+}
+function sub(p, q) {
+  const n = Math.max(p.length, q.length);
+  const r = new Array(n);
+  for (let i = 0;i < n; i++)
+    r[i] = (p[i] ?? ZERO2).subtract(q[i] ?? ZERO2);
+  return trim(r);
+}
+function scale(p, c) {
+  if (isZero(c))
+    return [ZERO2];
+  return p.map((a) => a.multiply(c));
+}
+var isPow2 = (n) => n > 0n && (n & n - 1n) === 0n;
+function tz(n) {
+  if (n === 0n)
+    return Infinity;
+  if (n < 0n)
+    n = -n;
+  return BigInt((n & -n).toString(2).length - 1);
+}
+function gcd3(a, b) {
+  if (a < 0n)
+    a = -a;
+  if (b < 0n)
+    b = -b;
+  if (isPow2(b)) {
+    if (a === 0n)
+      return b;
+    const k = tz(a);
+    const m = tz(b);
+    return 1n << (k < m ? k : m);
+  }
+  if (isPow2(a))
+    return gcd3(b, a);
+  while (b !== 0n)
+    [a, b] = [b, a % b];
+  return a;
+}
+function toInt(p) {
+  let den = 1n;
+  for (const c of p) {
+    const d = c.denominator;
+    if (d !== den)
+      den = den / gcd3(den, d) * d;
+  }
+  return { N: p.map((c) => c.numerator * (den / c.denominator)), den };
+}
+function mulSplit(p, q, maxDeg) {
+  const A = toInt(p);
+  const B = toInt(q);
+  const prod = new Array(p.length + q.length - 1).fill(0n);
+  for (let i = 0;i < p.length; i++) {
+    const a = A.N[i];
+    if (a === 0n)
+      continue;
+    for (let j = 0;j < q.length; j++) {
+      const b = B.N[j];
+      if (b !== 0n)
+        prod[i + j] += a * b;
+    }
+  }
+  const den = A.den * B.den;
+  const low = [];
+  const high = [];
+  for (let k = 0;k < prod.length; k++) {
+    const v = prod[k] === 0n ? ZERO2 : new Rational(prod[k], den);
+    if (k <= maxDeg)
+      low.push(v);
+    else
+      high[k] = v;
+  }
+  for (let k = 0;k < high.length; k++)
+    if (high[k] === undefined)
+      high[k] = ZERO2;
+  return { low: trim(low.length ? low : [ZERO2]), high };
+}
+function magBound(p, r) {
+  const { N, den } = toInt(p);
+  const rn = r.numerator < 0n ? -r.numerator : r.numerator;
+  const rd = r.denominator;
+  const n = N.length - 1;
+  let acc = 0n;
+  for (let j = n;j >= 0; j--) {
+    const a = N[j] < 0n ? -N[j] : N[j];
+    acc = acc * rn + a * rd ** BigInt(n - j);
+  }
+  return new Rational(acc, den * rd ** BigInt(n));
+}
+function evaluate2(p, x) {
+  let r = ZERO2;
+  for (let i = p.length - 1;i >= 0; i--)
+    r = r.multiply(x).add(p[i]);
+  return r;
+}
+function shift2(p, a) {
+  const c = p.slice();
+  if (isZero(a))
+    return c;
+  const n = c.length;
+  for (let i = 0;i < n - 1; i++) {
+    for (let j = n - 2;j >= i; j--)
+      c[j] = c[j].add(a.multiply(c[j + 1]));
+  }
+  return c;
+}
+function derivative(p) {
+  if (p.length <= 1)
+    return [ZERO2];
+  return trim(p.slice(1).map((a, i) => a.multiply(new Rational(BigInt(i + 1)))));
+}
+function antiderivative(p) {
+  return trim([ZERO2, ...p.map((a, i) => a.divide(new Rational(BigInt(i + 1))))]);
+}
+var binomCache = [];
+function binomRow(n) {
+  if (binomCache[n])
+    return binomCache[n];
+  const row = [1n];
+  for (let k = 1;k <= n; k++)
+    row.push(row[k - 1] * BigInt(n - k + 1) / BigInt(k));
+  binomCache[n] = row;
+  return row;
+}
+function bernstein(p, l, h) {
+  const n = p.length - 1;
+  if (n === 0)
+    return { iv: Iv.point(p[0]), tight: true };
+  const w = h.subtract(l);
+  const q = shift2(p, l);
+  let wk = ONE2;
+  for (let j = 0;j <= n; j++) {
+    q[j] = q[j].multiply(wk);
+    wk = wk.multiply(w);
+  }
+  const cn = binomRow(n);
+  let lo = null;
+  let hi = null;
+  const b = new Array(n + 1);
+  for (let i = 0;i <= n; i++) {
+    const ci = binomRow(i);
+    let s = ZERO2;
+    for (let j = 0;j <= i; j++) {
+      if (isZero(q[j]))
+        continue;
+      s = s.add(q[j].multiply(new Rational(ci[j], cn[j])));
+    }
+    b[i] = s;
+    lo = lo === null ? s : min(lo, s);
+    hi = hi === null ? s : max(hi, s);
+  }
+  const ends = [b[0], b[n]];
+  const tight = ends.some((e) => eq(e, lo)) && ends.some((e) => eq(e, hi));
+  return { iv: new Iv(lo, hi), tight, lowEnd: min(b[0], b[n]), highEnd: max(b[0], b[n]) };
+}
+function range2(p, l, h, { depth = 0, tol = null } = {}) {
+  p = trim(p);
+  if (p.length === 1)
+    return Iv.point(p[0]);
+  if (eq(l, h))
+    return Iv.point(evaluate2(p, l));
+  const pieces = [[l, h, 0]];
+  let lo = null;
+  let hi = null;
+  let attainedLo = null;
+  let attainedHi = null;
+  const results = [];
+  while (pieces.length) {
+    const [a, b, d] = pieces.pop();
+    const r = bernstein(p, a, b);
+    const vLo = r.lowEnd ?? r.iv.lo;
+    const vHi = r.highEnd ?? r.iv.hi;
+    attainedLo = attainedLo === null ? vLo : min(attainedLo, vLo);
+    attainedHi = attainedHi === null ? vHi : max(attainedHi, vHi);
+    const over = r.iv.width.subtract(vHi.subtract(vLo));
+    if (r.tight || d >= depth || tol && le(over, tol)) {
+      results.push(r.iv);
+    } else {
+      const m = a.add(b).divide(new Rational(2n));
+      pieces.push([a, m, d + 1], [m, b, d + 1]);
+    }
+  }
+  for (const iv of results) {
+    lo = lo === null ? iv.lo : min(lo, iv.lo);
+    hi = hi === null ? iv.hi : max(hi, iv.hi);
+  }
+  return new Iv(lo, hi);
+}
+function rangeOn(p, iv, opts) {
+  return range2(p, iv.lo, iv.hi, opts);
+}
+
+// ../../packages/analytic/src/elementary.js
+function compose(g, name, spec) {
+  if (!(g instanceof TaylorModel))
+    refuse("bad-operand", `${name} expects a Taylor model here`);
+  const n = g.order;
+  const bits = g.bits;
+  const c0 = g.coeffs[0];
+  const hCoeffs = g.coeffs.slice();
+  hCoeffs[0] = ZERO2;
+  const h = new TaylorModel({ domain: g.domain, coeffs: hCoeffs, rem: g.rem, order: 2 * n, bits, notes: g.notes, assumed: g.assumed });
+  const Rh = h.bound(2).hull(IV_ZERO);
+  const X = Rh.add(c0);
+  const { coeffs, lagrange, rule } = spec(c0, n, X, bits);
+  let poly = [ZERO2];
+  let rem = lagrange.mul(Rh.pow(n + 1));
+  let hk = null;
+  for (let k = 0;k <= n; k++) {
+    const ck = coeffs[k];
+    if (k > 0)
+      hk = hk === null ? h : hk.multiply(h);
+    const m = ck.isPoint ? ck.lo : roundMid(ck, bits);
+    const r = max(ck.hi.subtract(m).abs(), ck.lo.subtract(m).abs());
+    if (k === 0) {
+      poly = [m];
+      if (!isZero(r))
+        rem = rem.add(Iv.sym(r));
+      continue;
+    }
+    if (isZero(m) && isZero(r))
+      continue;
+    const term = hk.multiply(m);
+    poly = addPoly(poly, term.coeffs);
+    rem = rem.add(term.rem);
+    if (!isZero(r))
+      rem = rem.add(Iv.sym(r.multiply(poly_hb(hk).mag)));
+  }
+  return new TaylorModel({
+    domain: g.domain,
+    coeffs: poly,
+    rem,
+    order: n,
+    bits,
+    notes: [...g.notes, `${name} (${rule})`],
+    assumed: g.assumed
+  });
+}
+function addPoly(p, q) {
+  const n = Math.max(p.length, q.length);
+  const r = [];
+  for (let i = 0;i < n; i++)
+    r.push((p[i] ?? ZERO2).add(q[i] ?? ZERO2));
+  return r;
+}
+function roundMid(iv, bits) {
+  const m = iv.mid;
+  const e = log2Approx(m.abs());
+  return roundDyadic(m, bits + 24 - (Number.isFinite(e) ? e : 0));
+}
+function recipSpec(c0, n, X) {
+  if (X.containsZero()) {
+    refuse("division-by-zero", `cannot divide: the divisor's range ${X} contains 0`, { range: X.toRationalInterval() });
+  }
+  const coeffs = [];
+  let p = c0;
+  for (let k = 0;k <= n; k++) {
+    coeffs.push(Iv.point(new Rational(k % 2 === 0 ? 1n : -1n).divide(p)));
+    p = p.multiply(c0);
+  }
+  const lag = X.pow(n + 2).recip().scale(new Rational(n % 2 === 0 ? -1n : 1n));
+  return { coeffs, lagrange: lag, rule: "Lagrange, divisor range excludes 0" };
+}
+var reciprocal = (g) => compose(g, "1/x", recipSpec);
+function poly_hb(m) {
+  return Iv.sym(magBound(m.coeffs, m.domain.t.mag)).add(m.rem);
+}
+
+// ../../packages/analytic/src/model.js
+var DEFAULTS = { order: 12, bits: 96 };
+
+class DomainClass {
+  constructor(lo, hi, centre) {
+    if (gt(lo, hi))
+      [lo, hi] = [hi, lo];
+    if (centre === undefined)
+      centre = lo.add(hi).divide(new Rational(2n));
+    if (lt(centre, lo) || gt(centre, hi)) {
+      refuse("centre-outside", `centre ${centre} is not inside the domain [${lo}, ${hi}]`);
+    }
+    this.lo = lo;
+    this.hi = hi;
+    this.centre = centre;
+    this.t = new Iv(lo.subtract(centre), hi.subtract(centre));
+    Object.freeze(this);
+  }
+  get interval() {
+    return new RationalInterval(this.lo, this.hi);
+  }
+  get width() {
+    return this.hi.subtract(this.lo);
+  }
+  get radius() {
+    return this.t.mag;
+  }
+  contains(x) {
+    const v = Iv.from(x);
+    return le(this.lo, v.lo) && le(v.hi, this.hi);
+  }
+  equals(o) {
+    return o instanceof DomainClass && eq(this.lo, o.lo) && eq(this.hi, o.hi) && eq(this.centre, o.centre);
+  }
+  toString() {
+    return `[${this.lo}, ${this.hi}] about ${this.centre}`;
+  }
+  toJSON() {
+    return { lo: this.lo.toString(), hi: this.hi.toString(), centre: this.centre.toString() };
+  }
+}
+function Domain(a, b, opts) {
+  const isOpts = (v) => v && typeof v === "object" && !Array.isArray(v) && (("centre" in v) || ("center" in v));
+  if (a instanceof DomainClass) {
+    const c = (isOpts(b) ? b : opts)?.centre ?? (isOpts(b) ? b : opts)?.center;
+    return c === undefined ? a : new DomainClass(a.lo, a.hi, toQ(c));
+  }
+  let iv;
+  if (b === undefined || isOpts(b)) {
+    opts = b;
+    iv = Iv.from(a);
+  } else {
+    iv = new Iv(toQ(a), toQ(b));
+  }
+  const c = opts?.centre ?? opts?.center;
+  return new DomainClass(iv.lo, iv.hi, c === undefined ? undefined : toQ(c));
+}
+Domain.prototype = DomainClass.prototype;
+
+class TaylorModel {
+  constructor({ domain, coeffs, rem = IV_ZERO, order = DEFAULTS.order, bits = DEFAULTS.bits, notes = [], assumed = false }) {
+    this.domain = domain;
+    this.order = order;
+    this.bits = bits;
+    this.notes = [...new Set(notes)];
+    this.assumed = assumed;
+    let c = trim(coeffs.length ? coeffs : [ZERO2]);
+    let r = rem;
+    if (c.length - 1 > order) {
+      const high = c.map((v, i) => i > order ? v : ZERO2);
+      r = r.add(Iv.sym(magBound(high, domain.t.mag)));
+      c = trim(c.slice(0, order + 1));
+    }
+    const limit = 2 * bits + 64;
+    const tm = domain.t.mag;
+    let tk = ONE2;
+    for (let j = 0;j < c.length; j++) {
+      if (bitLen(c[j].denominator) > limit) {
+        const e = log2Approx(c[j].abs());
+        const d = roundDyadic(c[j], Math.max(bits + 16 - (Number.isFinite(e) ? e : 0), 8));
+        const diff = c[j].subtract(d).abs().multiply(tk);
+        r = r.add(Iv.sym(diff));
+        c[j] = d;
+      }
+      tk = tk.multiply(tm);
+    }
+    this.coeffs = c;
+    this.rem = r.roundOut(bits + 8);
+    Object.freeze(this);
+  }
+  static x(domain, opts = {}) {
+    const D = Domain(domain);
+    return new TaylorModel({ domain: D, coeffs: [D.centre, ONE2], ...settings(opts), notes: ["x"] });
+  }
+  static constant(domain, value, opts = {}) {
+    const D = Domain(domain);
+    const iv = Iv.from(value);
+    if (iv.isPoint)
+      return new TaylorModel({ domain: D, coeffs: [iv.lo], ...settings(opts), notes: ["constant"] });
+    const m = iv.mid;
+    return new TaylorModel({ domain: D, coeffs: [m], rem: iv.sub(m), ...settings(opts), notes: ["constant interval"] });
+  }
+  static polynomial(domain, coefficients, opts = {}) {
+    const D = Domain(domain);
+    const p = coefficients.map(toQ);
+    return new TaylorModel({ domain: D, coeffs: shift2(p, D.centre), ...settings(opts), notes: ["polynomial"] });
+  }
+  get centre() {
+    return this.domain.centre;
+  }
+  get coefficients() {
+    return this.coeffs.slice();
+  }
+  get coefficientsInX() {
+    return shift2(this.coeffs, this.domain.centre.negate());
+  }
+  get remainder() {
+    return this.rem.toRationalInterval();
+  }
+  get isExact() {
+    return this.rem.isPoint && isZero(this.rem.lo) && !this.assumed;
+  }
+  get degree() {
+    return this.coeffs.length - 1;
+  }
+  polyBound(depth = 0) {
+    return range2(this.coeffs, this.domain.t.lo, this.domain.t.hi, { depth });
+  }
+  bound(depth = 0) {
+    return this.polyBound(depth).add(this.rem);
+  }
+  at(x, { depth = 6 } = {}) {
+    const v = Iv.from(x);
+    if (!this.domain.contains(v)) {
+      refuse("outside-domain", `${v.isPoint ? v.lo : v} is outside the model's domain ${this.domain}`);
+    }
+    const t = v.sub(this.domain.centre);
+    const p = t.isPoint ? Iv.point(evaluate2(this.coeffs, t.lo)) : rangeOn(this.coeffs, t, { depth });
+    return p.add(this.rem).toRationalInterval();
+  }
+  range({ depth = 6 } = {}) {
+    return this.bound(depth).toRationalInterval();
+  }
+  #other(o, op) {
+    if (o instanceof TaylorModel) {
+      if (!o.domain.equals(this.domain)) {
+        refuse("domain-mismatch", `cannot ${op} models on different domains (${this.domain} and ${o.domain})`);
+      }
+      return o;
+    }
+    try {
+      return TaylorModel.constant(this.domain, o, { order: this.order, bits: this.bits });
+    } catch (e) {
+      if (e instanceof AnalyticError)
+        refuse("bad-operand", `cannot ${op} a Taylor model and ${describeValue(o)}`);
+      throw e;
+    }
+  }
+  #make(coeffs, rem, o, extraNotes = []) {
+    return new TaylorModel({
+      domain: this.domain,
+      coeffs,
+      rem,
+      order: o ? Math.min(this.order, o.order) : this.order,
+      bits: o ? Math.max(this.bits, o.bits) : this.bits,
+      notes: [...this.notes, ...o ? o.notes : [], ...extraNotes],
+      assumed: this.assumed || (o ? o.assumed : false)
+    });
+  }
+  add(o) {
+    o = this.#other(o, "add");
+    return this.#make(add(this.coeffs, o.coeffs), this.rem.add(o.rem), o);
+  }
+  subtract(o) {
+    o = this.#other(o, "subtract");
+    return this.#make(sub(this.coeffs, o.coeffs), this.rem.sub(o.rem), o);
+  }
+  negate() {
+    return this.#make(this.coeffs.map((c) => c.negate()), this.rem.neg());
+  }
+  multiply(o) {
+    if (!(o instanceof TaylorModel)) {
+      const iv = Iv.from(o);
+      if (iv.isPoint) {
+        return this.#make(scale(this.coeffs, iv.lo), this.rem.scale(iv.lo));
+      }
+    }
+    o = this.#other(o, "multiply");
+    const order = Math.min(this.order, o.order);
+    const { low, high } = mulSplit(this.coeffs, o.coeffs, order);
+    const t = this.domain.t;
+    let rem = high.length ? Iv.sym(magBound(high, t.mag)) : IV_ZERO;
+    const bp = Iv.sym(magBound(this.coeffs, t.mag));
+    const bq = Iv.sym(magBound(o.coeffs, t.mag));
+    rem = rem.add(bp.mul(o.rem)).add(bq.mul(this.rem)).add(this.rem.mul(o.rem));
+    return this.#make(low, rem, o);
+  }
+  divide(o) {
+    if (!(o instanceof TaylorModel)) {
+      const iv = Iv.from(o);
+      if (iv.isPoint) {
+        if (isZero(iv.lo))
+          refuse("division-by-zero", "division by zero");
+        return this.multiply(iv.lo.reciprocal());
+      }
+    }
+    o = this.#other(o, "divide");
+    return this.multiply(reciprocal(o));
+  }
+  pow(n) {
+    n = Number(typeof n === "object" ? toQ(n).toString() : n);
+    if (!Number.isInteger(n))
+      refuse("bad-exponent", `pow needs an integer exponent; use exp(a·log(f)) for ${n}`);
+    if (n < 0)
+      return reciprocal(this).pow(-n);
+    let result = TaylorModel.constant(this.domain, ONE2, { order: this.order, bits: this.bits });
+    let base = this;
+    while (n > 0) {
+      if (n & 1)
+        result = result.multiply(base);
+      n >>= 1;
+      if (n)
+        base = base.multiply(base);
+    }
+    return result;
+  }
+  integrate() {
+    const P = antiderivative(this.coeffs);
+    const rem = this.rem.mul(this.domain.t);
+    return new TaylorModel({
+      domain: this.domain,
+      coeffs: P,
+      rem,
+      order: this.order,
+      bits: this.bits,
+      notes: [...this.notes, "integrate"],
+      assumed: this.assumed
+    });
+  }
+  integral(a = this.domain.lo, b = this.domain.hi) {
+    a = toQ(a);
+    b = toQ(b);
+    for (const v of [a, b]) {
+      if (!this.domain.contains(v))
+        refuse("outside-domain", `integration limit ${v} is outside ${this.domain}`);
+    }
+    const P = antiderivative(this.coeffs);
+    const c = this.domain.centre;
+    const exact = evaluate2(P, b.subtract(c)).subtract(evaluate2(P, a.subtract(c)));
+    return Iv.point(exact).add(this.rem.scale(b.subtract(a))).toRationalInterval();
+  }
+  derivative() {
+    if (!(this.rem.isPoint && isZero(this.rem.lo))) {
+      refuse("derivative-of-model", "the remainder of a Taylor model does not bound the derivative's error; build a model of f' from its formula instead");
+    }
+    return new TaylorModel({
+      domain: this.domain,
+      coeffs: derivative(this.coeffs),
+      order: this.order,
+      bits: this.bits,
+      notes: [...this.notes, "derivative"],
+      assumed: this.assumed
+    });
+  }
+  describe() {
+    const lines = [
+      `Taylor model on ${this.domain}`,
+      `  order ${this.order}, degree ${this.degree}, ${this.bits} bits`,
+      `  remainder ${fmtIv(this.rem)} (width ${fmtQ(this.rem.width)})`,
+      `  built from: ${this.notes.join(", ") || "—"}`
+    ];
+    if (this.assumed)
+      lines.push("  note: uses an assumed bound supplied by the caller (not proven by the library)");
+    return lines.join(`
+`);
+  }
+  toString() {
+    const c = this.domain.centre;
+    const v = isZero(c) ? "x" : `(x - ${c})`;
+    const terms = this.coeffs.map((a, j) => isZero(a) ? null : j === 0 ? fmtQ(a) : `${fmtQ(a)}·${v}${j > 1 ? "^" + j : ""}`).filter(Boolean);
+    return `${terms.join(" + ") || "0"} + ${fmtIv(this.rem)}`;
+  }
+  toJSON() {
+    return {
+      type: "TaylorModel",
+      domain: this.domain.toJSON(),
+      order: this.order,
+      coefficients: this.coeffs.map(String),
+      remainder: [this.rem.lo.toString(), this.rem.hi.toString()],
+      notes: this.notes,
+      assumed: this.assumed
+    };
+  }
+}
+function settings(opts = {}) {
+  return { order: opts.order ?? DEFAULTS.order, bits: opts.bits ?? DEFAULTS.bits };
+}
+function fmtQ(q, digits = 8) {
+  if (q.denominator === 1n || q.toString().length <= 16)
+    return q.toString();
+  const n = q.toNumber();
+  return Number.isFinite(n) && n !== 0 ? n.toPrecision(digits) : q.toDecimal(digits);
+}
+function fmtIv(iv) {
+  if (iv.isPoint)
+    return `[${fmtQ(iv.lo)}]`;
+  return `[${fmtQ(iv.lo)}, ${fmtQ(iv.hi)}]`;
+}
 // ../calc/src/session.js
 var { Integer: Integer2, Rational: Rational2, RationalInterval: RationalInterval2 } = exports_core;
 var BLOCKED = new Set([
@@ -5866,6 +6675,28 @@ function formatRational(value, mode, digits, settings = {}) {
     return value.toContinuedFractionString();
   return decimal === exact ? exact : `${exact} = ${decimal}`;
 }
+function roundedInterval(interval, places) {
+  const scale = new Rational2(10n ** BigInt(places));
+  const lo = interval.low.multiply(scale).floor();
+  const hi = interval.high.multiply(scale).ceil();
+  const text = (n) => {
+    const digits = (n < 0n ? -n : n).toString().padStart(places + 1, "0");
+    const whole = digits.slice(0, digits.length - places);
+    const fraction = digits.slice(digits.length - places);
+    return `${n < 0n ? "-" : ""}${whole}${places ? `.${fraction}` : ""}`;
+  };
+  const a = text(lo);
+  const b = text(hi);
+  if (a === b)
+    return a;
+  let shared = 0;
+  while (shared < a.length && a.length === b.length && a[shared] === b[shared])
+    shared += 1;
+  const point = a.indexOf(".");
+  if (point === -1 || shared <= point + 1)
+    return `${a}:${b}`;
+  return `${a.slice(0, shared)}[${a.slice(shared)}:${b.slice(shared)}]`;
+}
 function formatValue(value, options = {}) {
   const { mode = "both", digits = 30, depth = 0, base = null } = options;
   const numeric = value instanceof Rational2 || value instanceof Integer2 || value instanceof RationalInterval2;
@@ -5885,12 +6716,23 @@ function formatValue(value, options = {}) {
     const exact = `${value.low.toString()}:${value.high.toString()}`;
     if (mode === "exact" || value.low.denominator === 1n && value.high.denominator === 1n)
       return exact;
-    const decimal = plainDecimal(value.toRepeatingDecimal({ limit: digits })) ?? `${value.low.toDecimal(digits)}:${value.high.toDecimal(digits)}`;
+    let decimal = null;
+    try {
+      decimal = plainDecimal(value.toRepeatingDecimal({ limit: digits }));
+    } catch {}
+    if (decimal === null || decimal.length > 2 * digits + 24) {
+      const rounded = roundedInterval(value, digits);
+      if (mode === "decimal" || exact.length > 2 * digits + 24)
+        return rounded;
+      return `${exact} ⊆ ${rounded}`;
+    }
     if (mode === "decimal")
       return decimal;
     return decimal === exact ? exact : `${exact} = ${decimal}`;
   }
   if (isCore(value))
+    return value.toString();
+  if (value instanceof TaylorModel)
     return value.toString();
   if (value === undefined)
     return "undefined";

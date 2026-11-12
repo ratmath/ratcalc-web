@@ -4,7 +4,7 @@
  * predefined snippets. Code runs in a worker (ratree-worker.js); see
  * ratree-scope.js for what is in scope. Definitions persist in localStorage.
  */
-import { SNIPPETS, migrateDefinition } from "./ratree-scope.js";
+import { ANALYTIC_SNIPPETS, SNIPPETS, migrateDefinition } from "./ratree-scope.js";
 import { nameProblem, nextName } from "./named-functions.js";
 
 export const STORAGE_KEY = "ratree.functions.v2";
@@ -223,9 +223,14 @@ export class FunctionsPanel {
     const presets = this.element("select", "fn-presets");
     presets.title = "Start from a predefined function";
     presets.append(Object.assign(this.element("option", "", "Predefined…"), { value: "" }));
-    for (const snippet of SNIPPETS) presets.append(Object.assign(this.element("option", "", snippet.label), { value: snippet.name }));
+    for (const [label, snippets] of [["Series with error bounds", SNIPPETS], ["Certified (@ratmath/analytic)", ANALYTIC_SNIPPETS]]) {
+      const group = this.element("optgroup");
+      group.label = label;
+      for (const snippet of snippets) group.append(Object.assign(this.element("option", "", snippet.label), { value: snippet.name }));
+      presets.append(group);
+    }
     presets.addEventListener("change", () => {
-      const snippet = SNIPPETS.find(({ name }) => name === presets.value);
+      const snippet = [...SNIPPETS, ...ANALYTIC_SNIPPETS].find(({ name }) => name === presets.value);
       presets.value = "";
       if (snippet) this.openEditor({ code: snippet.code, preferredName: snippet.name });
     });

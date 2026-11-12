@@ -75,6 +75,25 @@ __export(exports_core, {
   sum: () => sum
 });
 
+// ../../packages/analytic/src/elementary.js
+var exports_elementary = {};
+__export(exports_elementary, {
+  atan: () => atan,
+  cos: () => cos,
+  cosh: () => cosh,
+  exp: () => exp,
+  log: () => log,
+  log1p: () => log1p,
+  piIv: () => piIv,
+  power: () => power2,
+  reciprocal: () => reciprocal,
+  sin: () => sin,
+  sinh: () => sinh,
+  sqrt: () => sqrt,
+  tan: () => tan,
+  tanh: () => tanh
+});
+
 // ../../packages/core/src/base-system.js
 class BaseSystem {
   #base;
@@ -5759,6 +5778,1332 @@ var core_default = {
   reviveCoreValue
 };
 
+// ../../packages/analytic/src/errors.js
+class AnalyticError extends Error {
+  constructor(code, message, details = {}) {
+    super(message);
+    this.name = "AnalyticError";
+    this.code = code;
+    this.details = details;
+  }
+}
+function refuse(code, message, details) {
+  throw new AnalyticError(code, message, details);
+}
+
+// ../../packages/analytic/src/rat.js
+var ZERO2 = new Rational(0n);
+var ONE2 = new Rational(1n);
+var TWO = new Rational(2n);
+var HALF = new Rational(1n, 2n);
+function rat(n, d = 1n) {
+  return new Rational(BigInt(n), BigInt(d));
+}
+function toQ(v) {
+  if (v instanceof Rational)
+    return v;
+  if (typeof v === "bigint")
+    return new Rational(v);
+  if (typeof v === "number") {
+    if (!Number.isSafeInteger(v)) {
+      refuse("not-exact", `JS number ${v} is not an exact integer; pass a Rational (R\`...\`) or a string such as "1/10"`);
+    }
+    return new Rational(BigInt(v));
+  }
+  if (typeof v === "string")
+    return Rational.from(v);
+  if (v instanceof Integer)
+    return new Rational(v.value);
+  if (v instanceof Fraction)
+    return new Rational(v.numerator, v.denominator);
+  if (v && typeof v === "object" && typeof v.numerator === "bigint" && typeof v.denominator === "bigint") {
+    return new Rational(v.numerator, v.denominator);
+  }
+  refuse("not-a-number", `expected a rational number, got ${describeValue(v)}`);
+}
+function describeValue(v) {
+  if (v === null || v === undefined)
+    return String(v);
+  if (typeof v === "object")
+    return v.constructor?.name ?? "object";
+  return `${typeof v} ${String(v)}`;
+}
+var lt = (a, b) => a.compareTo(b) < 0;
+var le = (a, b) => a.compareTo(b) <= 0;
+var gt = (a, b) => a.compareTo(b) > 0;
+var ge = (a, b) => a.compareTo(b) >= 0;
+var eq = (a, b) => a.compareTo(b) === 0;
+var min = (a, b) => le(a, b) ? a : b;
+var max = (a, b) => ge(a, b) ? a : b;
+var isZero = (a) => a.numerator === 0n;
+var sign = (a) => a.numerator > 0n ? 1 : a.numerator < 0n ? -1 : 0;
+function floorDiv(a, b) {
+  if (a >= 0n)
+    return a / b;
+  return -((-a + b - 1n) / b);
+}
+function bitLen(n) {
+  if (n < 0n)
+    n = -n;
+  return n === 0n ? 0 : n.toString(2).length;
+}
+function log2Approx(q) {
+  if (q.numerator === 0n)
+    return -Infinity;
+  return bitLen(q.numerator) - bitLen(q.denominator);
+}
+function floorDyadic(q, bits) {
+  if (bits < 0) {
+    const s = 1n << BigInt(-bits);
+    return new Rational(floorDiv(q.numerator, q.denominator * s) * s);
+  }
+  const s = 1n << BigInt(bits);
+  return new Rational(floorDiv(q.numerator * s, q.denominator), s);
+}
+function ceilDyadic(q, bits) {
+  return floorDyadic(q.negate(), bits).negate();
+}
+function roundDyadic(q, bits) {
+  return floorDyadic(q.add(new Rational(1n, 1n << BigInt(bits + 1))), bits);
+}
+function factorial(n) {
+  let f = 1n;
+  for (let i = 2n;i <= BigInt(n); i++)
+    f *= i;
+  return f;
+}
+function isqrt(n) {
+  if (n < 0n)
+    throw new RangeError("isqrt of negative");
+  if (n < 2n)
+    return n;
+  let x = 1n << BigInt(Math.ceil(bitLen(n) / 2));
+  while (true) {
+    const y = x + n / x >> 1n;
+    if (y >= x)
+      break;
+    x = y;
+  }
+  while (x * x > n)
+    x -= 1n;
+  while ((x + 1n) * (x + 1n) <= n)
+    x += 1n;
+  return x;
+}
+
+// ../../packages/analytic/src/interval.js
+class Iv {
+  constructor(lo, hi = lo) {
+    if (gt(lo, hi))
+      [lo, hi] = [hi, lo];
+    this.lo = lo;
+    this.hi = hi;
+  }
+  static point(q) {
+    return new Iv(q, q);
+  }
+  static sym(r) {
+    const a = r.abs();
+    return new Iv(a.negate(), a);
+  }
+  static from(v) {
+    if (v instanceof Iv)
+      return v;
+    if (v instanceof RationalInterval)
+      return new Iv(v.low, v.high);
+    if (Array.isArray(v) && v.length === 2)
+      return new Iv(toQ(v[0]), toQ(v[1]));
+    if (v && typeof v === "object" && "low" in v && "high" in v && !(v instanceof Rational)) {
+      return new Iv(toQ(v.low), toQ(v.high));
+    }
+    return Iv.point(toQ(v));
+  }
+  get isPoint() {
+    return this.lo.compareTo(this.hi) === 0;
+  }
+  get width() {
+    return this.hi.subtract(this.lo);
+  }
+  get mid() {
+    return this.lo.add(this.hi).divide(new Rational(2n));
+  }
+  get rad() {
+    return this.width.divide(new Rational(2n));
+  }
+  get mag() {
+    return max(this.lo.abs(), this.hi.abs());
+  }
+  get mig() {
+    if (le(this.lo, ZERO2) && le(ZERO2, this.hi))
+      return ZERO2;
+    return min(this.lo.abs(), this.hi.abs());
+  }
+  containsZero() {
+    return le(this.lo, ZERO2) && le(ZERO2, this.hi);
+  }
+  contains(other) {
+    const o = other instanceof Iv ? other : Iv.point(other);
+    return le(this.lo, o.lo) && le(o.hi, this.hi);
+  }
+  add(o) {
+    o = asIv(o);
+    return new Iv(this.lo.add(o.lo), this.hi.add(o.hi));
+  }
+  sub(o) {
+    o = asIv(o);
+    return new Iv(this.lo.subtract(o.hi), this.hi.subtract(o.lo));
+  }
+  neg() {
+    return new Iv(this.hi.negate(), this.lo.negate());
+  }
+  mul(o) {
+    o = asIv(o);
+    if (this.isPoint && o.isPoint)
+      return Iv.point(this.lo.multiply(o.lo));
+    const p = [this.lo.multiply(o.lo), this.lo.multiply(o.hi), this.hi.multiply(o.lo), this.hi.multiply(o.hi)];
+    let lo = p[0];
+    let hi = p[0];
+    for (const v of p) {
+      lo = min(lo, v);
+      hi = max(hi, v);
+    }
+    return new Iv(lo, hi);
+  }
+  scale(q) {
+    return new Iv(this.lo.multiply(q), this.hi.multiply(q));
+  }
+  recip() {
+    if (this.containsZero())
+      refuse("division-by-zero", `cannot take the reciprocal of an interval containing 0 (${this})`);
+    return new Iv(this.hi.reciprocal(), this.lo.reciprocal());
+  }
+  div(o) {
+    return this.mul(asIv(o).recip());
+  }
+  pow(n) {
+    if (n === 0)
+      return Iv.point(ONE2);
+    const a = this.lo.pow(n);
+    const b = this.hi.pow(n);
+    if (n % 2 === 1)
+      return new Iv(a, b);
+    if (this.containsZero())
+      return new Iv(ZERO2, max(a, b));
+    return new Iv(min(a, b), max(a, b));
+  }
+  hull(o) {
+    o = asIv(o);
+    return new Iv(min(this.lo, o.lo), max(this.hi, o.hi));
+  }
+  intersect(o) {
+    o = asIv(o);
+    const lo = max(this.lo, o.lo);
+    const hi = min(this.hi, o.hi);
+    if (gt(lo, hi))
+      return null;
+    return new Iv(lo, hi);
+  }
+  roundOut(bits, absBits = bits * 2) {
+    const m = this.mag;
+    if (m.numerator === 0n)
+      return this;
+    const e = log2Approx(m);
+    const b = Math.min(bits - e, absBits);
+    const lo = floorDyadic(this.lo, b);
+    const hi = ceilDyadic(this.hi, b);
+    return new Iv(this.lo.denominator <= lo.denominator ? this.lo : lo, this.hi.denominator <= hi.denominator ? this.hi : hi);
+  }
+  toRationalInterval() {
+    return new RationalInterval(this.lo, this.hi);
+  }
+  toString() {
+    return `[${this.lo}, ${this.hi}]`;
+  }
+}
+function asIv(v) {
+  return v instanceof Iv ? v : Iv.point(v);
+}
+var IV_ZERO = Iv.point(ZERO2);
+var IV_ONE = Iv.point(ONE2);
+
+// ../../packages/analytic/src/poly.js
+function trim(p) {
+  let n = p.length;
+  while (n > 1 && isZero(p[n - 1]))
+    n--;
+  return n === p.length ? p : p.slice(0, n);
+}
+function add(p, q) {
+  const n = Math.max(p.length, q.length);
+  const r = new Array(n);
+  for (let i = 0;i < n; i++)
+    r[i] = (p[i] ?? ZERO2).add(q[i] ?? ZERO2);
+  return trim(r);
+}
+function sub(p, q) {
+  const n = Math.max(p.length, q.length);
+  const r = new Array(n);
+  for (let i = 0;i < n; i++)
+    r[i] = (p[i] ?? ZERO2).subtract(q[i] ?? ZERO2);
+  return trim(r);
+}
+function scale(p, c) {
+  if (isZero(c))
+    return [ZERO2];
+  return p.map((a) => a.multiply(c));
+}
+var isPow2 = (n) => n > 0n && (n & n - 1n) === 0n;
+function tz(n) {
+  if (n === 0n)
+    return Infinity;
+  if (n < 0n)
+    n = -n;
+  return BigInt((n & -n).toString(2).length - 1);
+}
+function gcd3(a, b) {
+  if (a < 0n)
+    a = -a;
+  if (b < 0n)
+    b = -b;
+  if (isPow2(b)) {
+    if (a === 0n)
+      return b;
+    const k = tz(a);
+    const m = tz(b);
+    return 1n << (k < m ? k : m);
+  }
+  if (isPow2(a))
+    return gcd3(b, a);
+  while (b !== 0n)
+    [a, b] = [b, a % b];
+  return a;
+}
+function toInt(p) {
+  let den = 1n;
+  for (const c of p) {
+    const d = c.denominator;
+    if (d !== den)
+      den = den / gcd3(den, d) * d;
+  }
+  return { N: p.map((c) => c.numerator * (den / c.denominator)), den };
+}
+function mulSplit(p, q, maxDeg) {
+  const A = toInt(p);
+  const B = toInt(q);
+  const prod = new Array(p.length + q.length - 1).fill(0n);
+  for (let i = 0;i < p.length; i++) {
+    const a = A.N[i];
+    if (a === 0n)
+      continue;
+    for (let j = 0;j < q.length; j++) {
+      const b = B.N[j];
+      if (b !== 0n)
+        prod[i + j] += a * b;
+    }
+  }
+  const den = A.den * B.den;
+  const low = [];
+  const high = [];
+  for (let k = 0;k < prod.length; k++) {
+    const v = prod[k] === 0n ? ZERO2 : new Rational(prod[k], den);
+    if (k <= maxDeg)
+      low.push(v);
+    else
+      high[k] = v;
+  }
+  for (let k = 0;k < high.length; k++)
+    if (high[k] === undefined)
+      high[k] = ZERO2;
+  return { low: trim(low.length ? low : [ZERO2]), high };
+}
+function magBound(p, r) {
+  const { N, den } = toInt(p);
+  const rn = r.numerator < 0n ? -r.numerator : r.numerator;
+  const rd = r.denominator;
+  const n = N.length - 1;
+  let acc = 0n;
+  for (let j = n;j >= 0; j--) {
+    const a = N[j] < 0n ? -N[j] : N[j];
+    acc = acc * rn + a * rd ** BigInt(n - j);
+  }
+  return new Rational(acc, den * rd ** BigInt(n));
+}
+function evaluate2(p, x) {
+  let r = ZERO2;
+  for (let i = p.length - 1;i >= 0; i--)
+    r = r.multiply(x).add(p[i]);
+  return r;
+}
+function shift2(p, a) {
+  const c = p.slice();
+  if (isZero(a))
+    return c;
+  const n = c.length;
+  for (let i = 0;i < n - 1; i++) {
+    for (let j = n - 2;j >= i; j--)
+      c[j] = c[j].add(a.multiply(c[j + 1]));
+  }
+  return c;
+}
+function derivative(p) {
+  if (p.length <= 1)
+    return [ZERO2];
+  return trim(p.slice(1).map((a, i) => a.multiply(new Rational(BigInt(i + 1)))));
+}
+function antiderivative(p) {
+  return trim([ZERO2, ...p.map((a, i) => a.divide(new Rational(BigInt(i + 1))))]);
+}
+var binomCache = [];
+function binomRow(n) {
+  if (binomCache[n])
+    return binomCache[n];
+  const row = [1n];
+  for (let k = 1;k <= n; k++)
+    row.push(row[k - 1] * BigInt(n - k + 1) / BigInt(k));
+  binomCache[n] = row;
+  return row;
+}
+function bernstein(p, l, h) {
+  const n = p.length - 1;
+  if (n === 0)
+    return { iv: Iv.point(p[0]), tight: true };
+  const w = h.subtract(l);
+  const q = shift2(p, l);
+  let wk = ONE2;
+  for (let j = 0;j <= n; j++) {
+    q[j] = q[j].multiply(wk);
+    wk = wk.multiply(w);
+  }
+  const cn = binomRow(n);
+  let lo = null;
+  let hi = null;
+  const b = new Array(n + 1);
+  for (let i = 0;i <= n; i++) {
+    const ci = binomRow(i);
+    let s = ZERO2;
+    for (let j = 0;j <= i; j++) {
+      if (isZero(q[j]))
+        continue;
+      s = s.add(q[j].multiply(new Rational(ci[j], cn[j])));
+    }
+    b[i] = s;
+    lo = lo === null ? s : min(lo, s);
+    hi = hi === null ? s : max(hi, s);
+  }
+  const ends = [b[0], b[n]];
+  const tight = ends.some((e) => eq(e, lo)) && ends.some((e) => eq(e, hi));
+  return { iv: new Iv(lo, hi), tight, lowEnd: min(b[0], b[n]), highEnd: max(b[0], b[n]) };
+}
+function range2(p, l, h, { depth = 0, tol = null } = {}) {
+  p = trim(p);
+  if (p.length === 1)
+    return Iv.point(p[0]);
+  if (eq(l, h))
+    return Iv.point(evaluate2(p, l));
+  const pieces = [[l, h, 0]];
+  let lo = null;
+  let hi = null;
+  let attainedLo = null;
+  let attainedHi = null;
+  const results = [];
+  while (pieces.length) {
+    const [a, b, d] = pieces.pop();
+    const r = bernstein(p, a, b);
+    const vLo = r.lowEnd ?? r.iv.lo;
+    const vHi = r.highEnd ?? r.iv.hi;
+    attainedLo = attainedLo === null ? vLo : min(attainedLo, vLo);
+    attainedHi = attainedHi === null ? vHi : max(attainedHi, vHi);
+    const over = r.iv.width.subtract(vHi.subtract(vLo));
+    if (r.tight || d >= depth || tol && le(over, tol)) {
+      results.push(r.iv);
+    } else {
+      const m = a.add(b).divide(new Rational(2n));
+      pieces.push([a, m, d + 1], [m, b, d + 1]);
+    }
+  }
+  for (const iv of results) {
+    lo = lo === null ? iv.lo : min(lo, iv.lo);
+    hi = hi === null ? iv.hi : max(hi, iv.hi);
+  }
+  return new Iv(lo, hi);
+}
+function rangeOn(p, iv, opts) {
+  return range2(p, iv.lo, iv.hi, opts);
+}
+
+// ../../packages/analytic/src/points.js
+var pow2 = (k) => k >= 0 ? new Rational(1n << BigInt(k)) : new Rational(1n, 1n << BigInt(-k));
+function sumSeries(t0, next, tailBound, wp, maxTerms = 1e5) {
+  const ulp = pow2(-(wp + 8));
+  const eps = pow2(-wp);
+  let sum = ZERO2;
+  let rounding = ZERO2;
+  let t = t0;
+  let k = 0;
+  while (true) {
+    const tail = tailBound(k, t);
+    if (tail !== null && le(tail, eps)) {
+      return new Iv(sum.subtract(tail).subtract(rounding), sum.add(tail).add(rounding));
+    }
+    if (k > maxTerms)
+      refuse("budget", "series did not converge within the term budget");
+    const tr = roundDyadic(t, wp + 8);
+    if (!eq(tr, t))
+      rounding = rounding.add(ulp);
+    sum = sum.add(tr);
+    k += 1;
+    t = next(t, k);
+  }
+}
+function expPoint(q, bits = 96) {
+  if (isZero(q))
+    return Iv.point(ONE2);
+  const neg = sign(q) < 0;
+  const a = q.abs();
+  const e = log2Approx(a);
+  const s = Math.max(0, e + 3);
+  const wp = bits + s + 16;
+  const r = a.divide(pow2(s));
+  let iv = sumSeries(ONE2, (t, k) => t.multiply(r).divide(new Rational(BigInt(k))), (k, t) => k === 0 ? null : t.multiply(TWO), wp);
+  for (let i = 0;i < s; i++)
+    iv = iv.mul(iv).roundOut(wp);
+  if (neg)
+    iv = iv.recip();
+  return iv.roundOut(bits + 4);
+}
+function atanSmall(x, wp) {
+  const x2 = x.multiply(x);
+  let p = x;
+  return sumSeries(x, (_t, k) => {
+    p = p.multiply(x2).negate();
+    return p.divide(new Rational(BigInt(2 * k + 1)));
+  }, (k, t) => k === 0 ? null : t.abs(), wp);
+}
+var piCache = null;
+function piIv(bits = 96) {
+  if (piCache && piCache.bits >= bits)
+    return piCache.iv;
+  const wp = bits + 12;
+  const a = atanSmall(rat(1, 5), wp).scale(rat(16));
+  const b = atanSmall(rat(1, 239), wp).scale(rat(4));
+  const iv = a.sub(b).roundOut(bits + 4);
+  piCache = { bits, iv };
+  return iv;
+}
+function atanPoint(q, bits = 96) {
+  if (isZero(q))
+    return Iv.point(ZERO2);
+  if (sign(q) < 0)
+    return atanPoint(q.negate(), bits).neg();
+  const wp = bits + 8;
+  let iv;
+  if (gt(q, TWO)) {
+    iv = piIv(wp).scale(HALF).sub(atanSmall(q.reciprocal(), wp));
+  } else if (gt(q, HALF)) {
+    iv = piIv(wp).scale(rat(1, 4)).add(atanSmall(q.subtract(ONE2).divide(q.add(ONE2)), wp));
+  } else {
+    iv = atanSmall(q, wp);
+  }
+  return iv.roundOut(bits + 4);
+}
+function twoAtanh(z, wp) {
+  const z2 = z.multiply(z);
+  const q = ONE2.subtract(z2);
+  let p = z;
+  return sumSeries(z, (_t, k) => {
+    p = p.multiply(z2);
+    return p.divide(new Rational(BigInt(2 * k + 1)));
+  }, (k, t) => k === 0 ? null : t.abs().divide(q), wp).scale(TWO);
+}
+var ln2Cache = null;
+function ln2Iv(bits) {
+  if (ln2Cache && ln2Cache.bits >= bits)
+    return ln2Cache.iv;
+  const iv = twoAtanh(rat(1, 3), bits + 8).roundOut(bits + 4);
+  ln2Cache = { bits, iv };
+  return iv;
+}
+function logPoint(q, bits = 96) {
+  if (le(q, ZERO2))
+    refuse("domain", `log is undefined at ${q} (needs a positive argument)`);
+  if (eq(q, ONE2))
+    return Iv.point(ZERO2);
+  let k = log2Approx(q);
+  let m = q.divide(pow2(k));
+  if (ge(m, rat(4, 3))) {
+    m = m.divide(TWO);
+    k += 1;
+  } else if (lt(m, rat(2, 3))) {
+    m = m.multiply(TWO);
+    k -= 1;
+  }
+  const wp = bits + 8 + bitLen(BigInt(Math.abs(k)));
+  let iv = twoAtanh(m.subtract(ONE2).divide(m.add(ONE2)), wp);
+  if (k !== 0)
+    iv = iv.add(ln2Iv(wp).scale(rat(k)));
+  return iv.roundOut(bits + 4);
+}
+function sinCosPoint(q, bits = 96) {
+  if (isZero(q))
+    return { sin: Iv.point(ZERO2), cos: Iv.point(ONE2) };
+  let x = q;
+  let slack = ZERO2;
+  const e = log2Approx(q);
+  const wp = bits + 12 + Math.max(0, e);
+  if (gt(q.abs(), rat(4))) {
+    const pi = piIv(wp + 8);
+    const twoPiMid = pi.mid.multiply(TWO);
+    const k = floorDiv(q.divide(twoPiMid).add(HALF).numerator, q.divide(twoPiMid).add(HALF).denominator);
+    const r = Iv.point(q).sub(pi.scale(new Rational(2n * k)));
+    x = roundDyadic(r.mid, wp + 8);
+    slack = r.lo.subtract(x).abs();
+    const s2 = r.hi.subtract(x).abs();
+    if (gt(s2, slack))
+      slack = s2;
+  }
+  const x2 = x.multiply(x);
+  const ax = x.abs();
+  let pa = ONE2;
+  const sin = sumSeries(x, (t, k) => t.multiply(x2).negate().divide(new Rational(BigInt(2 * k * (2 * k + 1)))), (k, t) => k === 0 ? null : t.abs().multiply(ax).divide(new Rational(BigInt(2 * k + 1))), wp);
+  const cos = sumSeries(ONE2, (t, k) => t.multiply(x2).negate().divide(new Rational(BigInt((2 * k - 1) * (2 * k)))), (k, t) => k === 0 ? null : t.abs().multiply(ax).divide(new Rational(BigInt(2 * k + 1))), wp);
+  const widen = (iv) => isZero(slack) ? iv : new Iv(iv.lo.subtract(slack), iv.hi.add(slack));
+  return { sin: widen(sin).roundOut(bits + 4), cos: widen(cos).roundOut(bits + 4) };
+}
+function sqrtPoint(q, bits = 96) {
+  if (lt(q, ZERO2))
+    refuse("domain", `sqrt is undefined at ${q} (needs a non-negative argument)`);
+  if (isZero(q))
+    return Iv.point(ZERO2);
+  const n = q.numerator;
+  const d = q.denominator;
+  const s = BigInt(bits + 8);
+  const S = isqrt(n * d << 2n * s);
+  const den = d << s;
+  if (S * S === n * d << 2n * s)
+    return Iv.point(new Rational(S, den));
+  return new Iv(new Rational(S, den), new Rational(S + 1n, den)).roundOut(bits + 4);
+}
+
+// ../../packages/analytic/src/elementary.js
+function compose(g, name, spec) {
+  if (!(g instanceof TaylorModel))
+    refuse("bad-operand", `${name} expects a Taylor model here`);
+  const n = g.order;
+  const bits = g.bits;
+  const c0 = g.coeffs[0];
+  const hCoeffs = g.coeffs.slice();
+  hCoeffs[0] = ZERO2;
+  const h = new TaylorModel({ domain: g.domain, coeffs: hCoeffs, rem: g.rem, order: 2 * n, bits, notes: g.notes, assumed: g.assumed });
+  const Rh = h.bound(2).hull(IV_ZERO);
+  const X = Rh.add(c0);
+  const { coeffs, lagrange, rule } = spec(c0, n, X, bits);
+  let poly = [ZERO2];
+  let rem = lagrange.mul(Rh.pow(n + 1));
+  let hk = null;
+  for (let k = 0;k <= n; k++) {
+    const ck = coeffs[k];
+    if (k > 0)
+      hk = hk === null ? h : hk.multiply(h);
+    const m = ck.isPoint ? ck.lo : roundMid(ck, bits);
+    const r = max(ck.hi.subtract(m).abs(), ck.lo.subtract(m).abs());
+    if (k === 0) {
+      poly = [m];
+      if (!isZero(r))
+        rem = rem.add(Iv.sym(r));
+      continue;
+    }
+    if (isZero(m) && isZero(r))
+      continue;
+    const term = hk.multiply(m);
+    poly = addPoly(poly, term.coeffs);
+    rem = rem.add(term.rem);
+    if (!isZero(r))
+      rem = rem.add(Iv.sym(r.multiply(poly_hb(hk).mag)));
+  }
+  return new TaylorModel({
+    domain: g.domain,
+    coeffs: poly,
+    rem,
+    order: n,
+    bits,
+    notes: [...g.notes, `${name} (${rule})`],
+    assumed: g.assumed
+  });
+}
+function addPoly(p, q) {
+  const n = Math.max(p.length, q.length);
+  const r = [];
+  for (let i = 0;i < n; i++)
+    r.push((p[i] ?? ZERO2).add(q[i] ?? ZERO2));
+  return r;
+}
+function roundMid(iv, bits) {
+  const m = iv.mid;
+  const e = log2Approx(m.abs());
+  return roundDyadic(m, bits + 24 - (Number.isFinite(e) ? e : 0));
+}
+var ivFact = (iv, n) => iv.scale(new Rational(1n, factorial(n)));
+function expSpec(c0, n, X, bits) {
+  const E = expPoint(c0, bits + 8);
+  const coeffs = [];
+  for (let k = 0;k <= n; k++)
+    coeffs.push(ivFact(E, k));
+  const M = new Iv(expPoint(X.lo, 32).lo, expPoint(X.hi, 32).hi);
+  return { coeffs, lagrange: ivFact(M, n + 1), rule: "Lagrange, |exp^(n+1)| ≤ e^max" };
+}
+function trigSpec(phase) {
+  return (c0, n, X, bits) => {
+    const { sin: sin2, cos: cos2 } = sinCosPoint(c0, bits + 8);
+    const cyc = [sin2, cos2, sin2.neg(), cos2.neg()];
+    const coeffs = [];
+    for (let k = 0;k <= n; k++)
+      coeffs.push(ivFact(cyc[(k + phase) % 4], k));
+    return { coeffs, lagrange: ivFact(new Iv(rat(-1), ONE2), n + 1), rule: "Lagrange, |derivatives| ≤ 1" };
+  };
+}
+function logSpec(c0, n, X, bits) {
+  if (le(X.lo, ZERO2)) {
+    refuse("domain", `log needs a positive argument, but the argument's range ${X} reaches ${X.lo}`, { range: X.toRationalInterval() });
+  }
+  const coeffs = [logPoint(c0, bits + 8)];
+  let p = ONE2;
+  for (let k = 1;k <= n; k++) {
+    p = p.multiply(c0);
+    const v = new Rational(k % 2 === 1 ? 1n : -1n).divide(p.multiply(new Rational(BigInt(k))));
+    coeffs.push(Iv.point(v));
+  }
+  const s = new Rational(n % 2 === 0 ? 1n : -1n, BigInt(n + 1));
+  const lag = X.pow(n + 1).recip().scale(s);
+  return { coeffs, lagrange: lag, rule: "Lagrange, argument range bounded away from 0" };
+}
+function atanSpec(c0, n, X, bits) {
+  const coeffs = [atanPoint(c0, bits + 8)];
+  const A = ONE2.add(c0.multiply(c0));
+  const B = TWO.multiply(c0);
+  const b = [];
+  for (let j = 0;j < n; j++) {
+    let v = j === 0 ? ONE2 : ZERO2;
+    if (j >= 1)
+      v = v.subtract(B.multiply(b[j - 1]));
+    if (j >= 2)
+      v = v.subtract(b[j - 2]);
+    b.push(v.divide(A));
+  }
+  for (let k = 1;k <= n; k++)
+    coeffs.push(Iv.point(b[k - 1].divide(new Rational(BigInt(k)))));
+  const m = X.mig;
+  const den = ONE2.add(m.multiply(m)).pow(Math.floor((n + 1) / 2)).multiply(new Rational(BigInt(n + 1)));
+  return { coeffs, lagrange: Iv.sym(den.reciprocal()), rule: "Lagrange, |atan^(k)| ≤ (k−1)!/(1+x²)^(k/2)" };
+}
+function sqrtSpec(c0, n, X, bits) {
+  if (le(X.lo, ZERO2)) {
+    refuse("domain", `sqrt models need the argument's range to stay above 0, but it reaches ${X.lo}`, { range: X.toRationalInterval() });
+  }
+  const S = sqrtPoint(c0, bits + 8);
+  const bin = [ONE2];
+  for (let k = 1;k <= n + 1; k++)
+    bin.push(bin[k - 1].multiply(HALF.subtract(new Rational(BigInt(k - 1)))).divide(new Rational(BigInt(k))));
+  const coeffs = [];
+  let p = ONE2;
+  for (let k = 0;k <= n; k++) {
+    coeffs.push(S.scale(bin[k].divide(p)));
+    p = p.multiply(c0);
+  }
+  const hiVal = sqrtPoint(X.lo, 32).hi.divide(X.lo.pow(n + 1));
+  const loVal = sqrtPoint(X.hi, 32).lo.divide(X.hi.pow(n + 1));
+  const lag = new Iv(loVal, hiVal).scale(bin[n + 1]);
+  return { coeffs, lagrange: lag, rule: "Lagrange, argument range bounded away from 0" };
+}
+function recipSpec(c0, n, X) {
+  if (X.containsZero()) {
+    refuse("division-by-zero", `cannot divide: the divisor's range ${X} contains 0`, { range: X.toRationalInterval() });
+  }
+  const coeffs = [];
+  let p = c0;
+  for (let k = 0;k <= n; k++) {
+    coeffs.push(Iv.point(new Rational(k % 2 === 0 ? 1n : -1n).divide(p)));
+    p = p.multiply(c0);
+  }
+  const lag = X.pow(n + 2).recip().scale(new Rational(n % 2 === 0 ? -1n : 1n));
+  return { coeffs, lagrange: lag, rule: "Lagrange, divisor range excludes 0" };
+}
+var exp = (g) => compose(g, "exp", expSpec);
+var sin = (g) => compose(g, "sin", trigSpec(0));
+var cos = (g) => compose(g, "cos", trigSpec(1));
+var log = (g) => compose(g, "log", logSpec);
+var atan = (g) => compose(g, "atan", atanSpec);
+var sqrt = (g) => compose(g, "sqrt", sqrtSpec);
+var reciprocal = (g) => compose(g, "1/x", recipSpec);
+var log1p = (g) => log(g.add(ONE2));
+var tan = (g) => sin(g).divide(cos(g));
+var sinh = (g) => exp(g).subtract(exp(g.negate())).multiply(HALF);
+var cosh = (g) => exp(g).add(exp(g.negate())).multiply(HALF);
+var tanh = (g) => {
+  const e = exp(g);
+  const ei = exp(g.negate());
+  return e.subtract(ei).divide(e.add(ei));
+};
+function power2(g, a) {
+  const q = a instanceof Rational ? a : new Rational(BigInt(a));
+  if (q.denominator === 1n)
+    return g.pow(Number(q.numerator));
+  if (eq(q, HALF))
+    return sqrt(g);
+  return exp(log(g).multiply(q));
+}
+function poly_hb(m) {
+  return Iv.sym(magBound(m.coeffs, m.domain.t.mag)).add(m.rem);
+}
+
+// ../../packages/analytic/src/model.js
+var DEFAULTS = { order: 12, bits: 96 };
+
+class DomainClass {
+  constructor(lo, hi, centre) {
+    if (gt(lo, hi))
+      [lo, hi] = [hi, lo];
+    if (centre === undefined)
+      centre = lo.add(hi).divide(new Rational(2n));
+    if (lt(centre, lo) || gt(centre, hi)) {
+      refuse("centre-outside", `centre ${centre} is not inside the domain [${lo}, ${hi}]`);
+    }
+    this.lo = lo;
+    this.hi = hi;
+    this.centre = centre;
+    this.t = new Iv(lo.subtract(centre), hi.subtract(centre));
+    Object.freeze(this);
+  }
+  get interval() {
+    return new RationalInterval(this.lo, this.hi);
+  }
+  get width() {
+    return this.hi.subtract(this.lo);
+  }
+  get radius() {
+    return this.t.mag;
+  }
+  contains(x) {
+    const v = Iv.from(x);
+    return le(this.lo, v.lo) && le(v.hi, this.hi);
+  }
+  equals(o) {
+    return o instanceof DomainClass && eq(this.lo, o.lo) && eq(this.hi, o.hi) && eq(this.centre, o.centre);
+  }
+  toString() {
+    return `[${this.lo}, ${this.hi}] about ${this.centre}`;
+  }
+  toJSON() {
+    return { lo: this.lo.toString(), hi: this.hi.toString(), centre: this.centre.toString() };
+  }
+}
+function Domain(a, b, opts) {
+  const isOpts = (v) => v && typeof v === "object" && !Array.isArray(v) && (("centre" in v) || ("center" in v));
+  if (a instanceof DomainClass) {
+    const c = (isOpts(b) ? b : opts)?.centre ?? (isOpts(b) ? b : opts)?.center;
+    return c === undefined ? a : new DomainClass(a.lo, a.hi, toQ(c));
+  }
+  let iv;
+  if (b === undefined || isOpts(b)) {
+    opts = b;
+    iv = Iv.from(a);
+  } else {
+    iv = new Iv(toQ(a), toQ(b));
+  }
+  const c = opts?.centre ?? opts?.center;
+  return new DomainClass(iv.lo, iv.hi, c === undefined ? undefined : toQ(c));
+}
+Domain.prototype = DomainClass.prototype;
+
+class TaylorModel {
+  constructor({ domain, coeffs, rem = IV_ZERO, order = DEFAULTS.order, bits = DEFAULTS.bits, notes = [], assumed = false }) {
+    this.domain = domain;
+    this.order = order;
+    this.bits = bits;
+    this.notes = [...new Set(notes)];
+    this.assumed = assumed;
+    let c = trim(coeffs.length ? coeffs : [ZERO2]);
+    let r = rem;
+    if (c.length - 1 > order) {
+      const high = c.map((v, i) => i > order ? v : ZERO2);
+      r = r.add(Iv.sym(magBound(high, domain.t.mag)));
+      c = trim(c.slice(0, order + 1));
+    }
+    const limit = 2 * bits + 64;
+    const tm = domain.t.mag;
+    let tk = ONE2;
+    for (let j = 0;j < c.length; j++) {
+      if (bitLen(c[j].denominator) > limit) {
+        const e = log2Approx(c[j].abs());
+        const d = roundDyadic(c[j], Math.max(bits + 16 - (Number.isFinite(e) ? e : 0), 8));
+        const diff = c[j].subtract(d).abs().multiply(tk);
+        r = r.add(Iv.sym(diff));
+        c[j] = d;
+      }
+      tk = tk.multiply(tm);
+    }
+    this.coeffs = c;
+    this.rem = r.roundOut(bits + 8);
+    Object.freeze(this);
+  }
+  static x(domain, opts = {}) {
+    const D = Domain(domain);
+    return new TaylorModel({ domain: D, coeffs: [D.centre, ONE2], ...settings(opts), notes: ["x"] });
+  }
+  static constant(domain, value, opts = {}) {
+    const D = Domain(domain);
+    const iv = Iv.from(value);
+    if (iv.isPoint)
+      return new TaylorModel({ domain: D, coeffs: [iv.lo], ...settings(opts), notes: ["constant"] });
+    const m = iv.mid;
+    return new TaylorModel({ domain: D, coeffs: [m], rem: iv.sub(m), ...settings(opts), notes: ["constant interval"] });
+  }
+  static polynomial(domain, coefficients, opts = {}) {
+    const D = Domain(domain);
+    const p = coefficients.map(toQ);
+    return new TaylorModel({ domain: D, coeffs: shift2(p, D.centre), ...settings(opts), notes: ["polynomial"] });
+  }
+  get centre() {
+    return this.domain.centre;
+  }
+  get coefficients() {
+    return this.coeffs.slice();
+  }
+  get coefficientsInX() {
+    return shift2(this.coeffs, this.domain.centre.negate());
+  }
+  get remainder() {
+    return this.rem.toRationalInterval();
+  }
+  get isExact() {
+    return this.rem.isPoint && isZero(this.rem.lo) && !this.assumed;
+  }
+  get degree() {
+    return this.coeffs.length - 1;
+  }
+  polyBound(depth = 0) {
+    return range2(this.coeffs, this.domain.t.lo, this.domain.t.hi, { depth });
+  }
+  bound(depth = 0) {
+    return this.polyBound(depth).add(this.rem);
+  }
+  at(x, { depth = 6 } = {}) {
+    const v = Iv.from(x);
+    if (!this.domain.contains(v)) {
+      refuse("outside-domain", `${v.isPoint ? v.lo : v} is outside the model's domain ${this.domain}`);
+    }
+    const t = v.sub(this.domain.centre);
+    const p = t.isPoint ? Iv.point(evaluate2(this.coeffs, t.lo)) : rangeOn(this.coeffs, t, { depth });
+    return p.add(this.rem).toRationalInterval();
+  }
+  range({ depth = 6 } = {}) {
+    return this.bound(depth).toRationalInterval();
+  }
+  #other(o, op) {
+    if (o instanceof TaylorModel) {
+      if (!o.domain.equals(this.domain)) {
+        refuse("domain-mismatch", `cannot ${op} models on different domains (${this.domain} and ${o.domain})`);
+      }
+      return o;
+    }
+    try {
+      return TaylorModel.constant(this.domain, o, { order: this.order, bits: this.bits });
+    } catch (e) {
+      if (e instanceof AnalyticError)
+        refuse("bad-operand", `cannot ${op} a Taylor model and ${describeValue(o)}`);
+      throw e;
+    }
+  }
+  #make(coeffs, rem, o, extraNotes = []) {
+    return new TaylorModel({
+      domain: this.domain,
+      coeffs,
+      rem,
+      order: o ? Math.min(this.order, o.order) : this.order,
+      bits: o ? Math.max(this.bits, o.bits) : this.bits,
+      notes: [...this.notes, ...o ? o.notes : [], ...extraNotes],
+      assumed: this.assumed || (o ? o.assumed : false)
+    });
+  }
+  add(o) {
+    o = this.#other(o, "add");
+    return this.#make(add(this.coeffs, o.coeffs), this.rem.add(o.rem), o);
+  }
+  subtract(o) {
+    o = this.#other(o, "subtract");
+    return this.#make(sub(this.coeffs, o.coeffs), this.rem.sub(o.rem), o);
+  }
+  negate() {
+    return this.#make(this.coeffs.map((c) => c.negate()), this.rem.neg());
+  }
+  multiply(o) {
+    if (!(o instanceof TaylorModel)) {
+      const iv = Iv.from(o);
+      if (iv.isPoint) {
+        return this.#make(scale(this.coeffs, iv.lo), this.rem.scale(iv.lo));
+      }
+    }
+    o = this.#other(o, "multiply");
+    const order = Math.min(this.order, o.order);
+    const { low, high } = mulSplit(this.coeffs, o.coeffs, order);
+    const t = this.domain.t;
+    let rem = high.length ? Iv.sym(magBound(high, t.mag)) : IV_ZERO;
+    const bp = Iv.sym(magBound(this.coeffs, t.mag));
+    const bq = Iv.sym(magBound(o.coeffs, t.mag));
+    rem = rem.add(bp.mul(o.rem)).add(bq.mul(this.rem)).add(this.rem.mul(o.rem));
+    return this.#make(low, rem, o);
+  }
+  divide(o) {
+    if (!(o instanceof TaylorModel)) {
+      const iv = Iv.from(o);
+      if (iv.isPoint) {
+        if (isZero(iv.lo))
+          refuse("division-by-zero", "division by zero");
+        return this.multiply(iv.lo.reciprocal());
+      }
+    }
+    o = this.#other(o, "divide");
+    return this.multiply(reciprocal(o));
+  }
+  pow(n) {
+    n = Number(typeof n === "object" ? toQ(n).toString() : n);
+    if (!Number.isInteger(n))
+      refuse("bad-exponent", `pow needs an integer exponent; use exp(a·log(f)) for ${n}`);
+    if (n < 0)
+      return reciprocal(this).pow(-n);
+    let result = TaylorModel.constant(this.domain, ONE2, { order: this.order, bits: this.bits });
+    let base = this;
+    while (n > 0) {
+      if (n & 1)
+        result = result.multiply(base);
+      n >>= 1;
+      if (n)
+        base = base.multiply(base);
+    }
+    return result;
+  }
+  integrate() {
+    const P = antiderivative(this.coeffs);
+    const rem = this.rem.mul(this.domain.t);
+    return new TaylorModel({
+      domain: this.domain,
+      coeffs: P,
+      rem,
+      order: this.order,
+      bits: this.bits,
+      notes: [...this.notes, "integrate"],
+      assumed: this.assumed
+    });
+  }
+  integral(a = this.domain.lo, b = this.domain.hi) {
+    a = toQ(a);
+    b = toQ(b);
+    for (const v of [a, b]) {
+      if (!this.domain.contains(v))
+        refuse("outside-domain", `integration limit ${v} is outside ${this.domain}`);
+    }
+    const P = antiderivative(this.coeffs);
+    const c = this.domain.centre;
+    const exact = evaluate2(P, b.subtract(c)).subtract(evaluate2(P, a.subtract(c)));
+    return Iv.point(exact).add(this.rem.scale(b.subtract(a))).toRationalInterval();
+  }
+  derivative() {
+    if (!(this.rem.isPoint && isZero(this.rem.lo))) {
+      refuse("derivative-of-model", "the remainder of a Taylor model does not bound the derivative's error; build a model of f' from its formula instead");
+    }
+    return new TaylorModel({
+      domain: this.domain,
+      coeffs: derivative(this.coeffs),
+      order: this.order,
+      bits: this.bits,
+      notes: [...this.notes, "derivative"],
+      assumed: this.assumed
+    });
+  }
+  describe() {
+    const lines = [
+      `Taylor model on ${this.domain}`,
+      `  order ${this.order}, degree ${this.degree}, ${this.bits} bits`,
+      `  remainder ${fmtIv(this.rem)} (width ${fmtQ(this.rem.width)})`,
+      `  built from: ${this.notes.join(", ") || "—"}`
+    ];
+    if (this.assumed)
+      lines.push("  note: uses an assumed bound supplied by the caller (not proven by the library)");
+    return lines.join(`
+`);
+  }
+  toString() {
+    const c = this.domain.centre;
+    const v = isZero(c) ? "x" : `(x - ${c})`;
+    const terms = this.coeffs.map((a, j) => isZero(a) ? null : j === 0 ? fmtQ(a) : `${fmtQ(a)}·${v}${j > 1 ? "^" + j : ""}`).filter(Boolean);
+    return `${terms.join(" + ") || "0"} + ${fmtIv(this.rem)}`;
+  }
+  toJSON() {
+    return {
+      type: "TaylorModel",
+      domain: this.domain.toJSON(),
+      order: this.order,
+      coefficients: this.coeffs.map(String),
+      remainder: [this.rem.lo.toString(), this.rem.hi.toString()],
+      notes: this.notes,
+      assumed: this.assumed
+    };
+  }
+}
+function settings(opts = {}) {
+  return { order: opts.order ?? DEFAULTS.order, bits: opts.bits ?? DEFAULTS.bits };
+}
+function fmtQ(q, digits = 8) {
+  if (q.denominator === 1n || q.toString().length <= 16)
+    return q.toString();
+  const n = q.toNumber();
+  return Number.isFinite(n) && n !== 0 ? n.toPrecision(digits) : q.toDecimal(digits);
+}
+function fmtIv(iv) {
+  if (iv.isPoint)
+    return `[${fmtQ(iv.lo)}]`;
+  return `[${fmtQ(iv.lo)}, ${fmtQ(iv.hi)}]`;
+}
+// ../../packages/analytic/src/enclose.js
+var out = (iv) => iv.toRationalInterval();
+function monotone(pointFn, check) {
+  return (x, bits = 96) => {
+    const v = Iv.from(x);
+    if (check)
+      check(v);
+    if (v.isPoint)
+      return out(pointFn(v.lo, bits));
+    return out(new Iv(pointFn(v.lo, bits).lo, pointFn(v.hi, bits).hi));
+  };
+}
+var enclose = {
+  exp: monotone(expPoint),
+  log: monotone(logPoint, (v) => {
+    if (le(v.lo, ZERO2))
+      refuse("domain", `log needs positive arguments, got ${v}`);
+  }),
+  sqrt: monotone(sqrtPoint, (v) => {
+    if (lt(v.lo, ZERO2))
+      refuse("domain", `sqrt needs non-negative arguments, got ${v}`);
+  }),
+  atan: monotone(atanPoint),
+  sin(x, bits = 96) {
+    const v = Iv.from(x);
+    if (v.isPoint)
+      return out(sinCosPoint(v.lo, bits).sin);
+    if (gt(v.width, rat(6)))
+      return out(new Iv(rat(-1), ONE2));
+    return pieces(v, bits, sin, new Iv(rat(-1), ONE2));
+  },
+  cos(x, bits = 96) {
+    const v = Iv.from(x);
+    if (v.isPoint)
+      return out(sinCosPoint(v.lo, bits).cos);
+    if (gt(v.width, rat(6)))
+      return out(new Iv(rat(-1), ONE2));
+    return pieces(v, bits, cos, new Iv(rat(-1), ONE2));
+  },
+  tan(x, bits = 96) {
+    const v = Iv.from(x);
+    if (v.isPoint) {
+      const { sin, cos } = sinCosPoint(v.lo, bits + 8);
+      return out(sin.div(cos).roundOut(bits + 4));
+    }
+    return pieces(v, bits, tan);
+  }
+};
+enclose.log1p = (x, bits = 96) => enclose.log(Iv.from(x).add(ONE2), bits);
+enclose.sinh = (x, bits = 96) => {
+  const v = Iv.from(x);
+  const f = (q) => {
+    const e = expPoint(q, bits + 8);
+    return e.sub(e.recip()).scale(HALF);
+  };
+  return out(v.isPoint ? f(v.lo).roundOut(bits + 4) : new Iv(f(v.lo).lo, f(v.hi).hi));
+};
+enclose.cosh = (x, bits = 96) => {
+  const v = Iv.from(x);
+  const f = (q) => {
+    const e = expPoint(q, bits + 8);
+    return e.add(e.recip()).scale(HALF);
+  };
+  if (v.isPoint)
+    return out(f(v.lo).roundOut(bits + 4));
+  const a = f(v.lo);
+  const b = f(v.hi);
+  const lo = v.containsZero() ? ONE2 : lt(a.lo, b.lo) ? a.lo : b.lo;
+  return out(new Iv(lo, gt(a.hi, b.hi) ? a.hi : b.hi));
+};
+enclose.tanh = (x, bits = 96) => {
+  const v = Iv.from(x);
+  const f = (q) => {
+    const e = expPoint(q.multiply(TWO), bits + 8);
+    return e.sub(ONE2).div(e.add(ONE2));
+  };
+  return out(v.isPoint ? f(v.lo).roundOut(bits + 4) : new Iv(f(v.lo).lo, f(v.hi).hi));
+};
+function pieces(v, bits, fn, clamp) {
+  const n = Math.max(1, Math.min(64, Math.ceil(v.width.multiply(TWO).toNumber())));
+  const step = v.width.divide(new Rational(BigInt(n)));
+  let acc = null;
+  for (let i = 0;i < n; i++) {
+    const a = v.lo.add(step.multiply(new Rational(BigInt(i))));
+    const b = i === n - 1 ? v.hi : a.add(step);
+    const m = fn(TaylorModel.x(Domain(new Iv(a, b)), { order: 10, bits }));
+    const r = m.bound(6);
+    acc = acc ? acc.hull(r) : r;
+  }
+  if (clamp)
+    acc = acc.intersect(clamp) ?? acc;
+  return out(acc.roundOut(bits + 4));
+}
+var constants = {
+  pi: (bits = 96) => out(piIv(bits)),
+  e: (bits = 96) => out(expPoint(ONE2, bits))
+};
+
+// ../../packages/analytic/src/series.js
+function series(domain, spec = {}) {
+  const D = Domain(domain, spec.centre !== undefined ? { centre: spec.centre } : undefined);
+  const { order, bits } = settings(spec);
+  const p = spec.degree ?? order;
+  const coef = typeof spec.coefficient === "function" ? (k) => toQ(spec.coefficient(k)) : Array.isArray(spec.coefficients) ? (k) => k < spec.coefficients.length ? toQ(spec.coefficients[k]) : ZERO2 : refuse("bad-series", "series needs coefficient: k => a_k or coefficients: [...]");
+  const a = [];
+  for (let k = 0;k <= p; k++)
+    a.push(coef(k));
+  const r = D.radius;
+  const t = D.t;
+  const rule = spec.rule ?? (Array.isArray(spec.coefficients) && spec.coefficients.length <= p + 1 ? "exact" : null);
+  const look = spec.lookahead ?? 32;
+  let rem;
+  let assumed = false;
+  let note;
+  switch (rule) {
+    case "exact": {
+      rem = Iv.point(ZERO2);
+      note = "polynomial";
+      break;
+    }
+    case "lagrange": {
+      if (spec.M === undefined)
+        refuse("bad-series", "Lagrange rule needs M ≥ max |f^(p+1)| on the domain");
+      const M = toQ(spec.M).abs();
+      rem = Iv.sym(M.multiply(r.pow(p + 1)).divide(new Rational(factorial(p + 1))));
+      assumed = !spec.proven;
+      note = `series (Lagrange, M = ${M})`;
+      break;
+    }
+    case "ratio": {
+      if (spec.q === undefined)
+        refuse("bad-series", "ratio rule needs q < 1 with |a_{k+1}|·r ≤ q·|a_k| for k > p");
+      const q = toQ(spec.q);
+      if (!(ge(q, ZERO2) && lt(q, ONE2)))
+        refuse("hypothesis", `ratio rule needs 0 ≤ q < 1, got ${q}`);
+      let prev = coef(p + 1);
+      for (let k = p + 2;k <= p + 1 + look; k++) {
+        const next = coef(k);
+        if (gt(next.abs().multiply(r), q.multiply(prev.abs()))) {
+          refuse("hypothesis", `ratio rule fails at k = ${k - 1}: |a_${k}|·r > q·|a_${k - 1}| on this domain`, { k });
+        }
+        prev = next;
+      }
+      const first = coef(p + 1).abs().multiply(r.pow(p + 1));
+      rem = Iv.sym(first.divide(ONE2.subtract(q)));
+      assumed = !spec.proven;
+      note = `series (ratio tail, q = ${q}, checked ${look} terms)`;
+      break;
+    }
+    case "alternating": {
+      const tail = [];
+      for (let k = p + 1;k <= p + 1 + look; k++)
+        tail.push(coef(k));
+      const signs = tail.map(sign);
+      if (signs.some((s) => s === 0))
+        refuse("hypothesis", "alternating rule needs nonzero tail coefficients");
+      if (gt(t.hi, ZERO2) && !signs.every((s, i) => i === 0 || s === -signs[i - 1])) {
+        refuse("hypothesis", "alternating rule fails for x > centre: tail coefficients do not alternate in sign");
+      }
+      if (lt(t.lo, ZERO2) && !signs.every((s) => s === signs[0])) {
+        refuse("hypothesis", "alternating rule fails for x < centre: tail terms a_k (x−c)^k do not alternate");
+      }
+      for (let i = 1;i < tail.length; i++) {
+        if (gt(tail[i].abs().multiply(r), tail[i - 1].abs())) {
+          refuse("hypothesis", `alternating rule fails: terms grow at k = ${p + 1 + i} on this domain`);
+        }
+      }
+      const first = Iv.point(tail[0]).mul(t.pow(p + 1));
+      rem = first.hull(Iv.point(ZERO2));
+      assumed = !spec.proven;
+      note = `series (alternating, checked ${look} terms)`;
+      break;
+    }
+    case "explicit": {
+      if (spec.error === undefined)
+        refuse("bad-series", "explicit rule needs error: an interval or bound for the tail");
+      const e = Iv.from(spec.error);
+      rem = e.isPoint ? Iv.sym(e.lo) : e;
+      assumed = true;
+      note = "series (explicit error, assumed)";
+      break;
+    }
+    default:
+      refuse("bad-series", `unknown or missing rule "${rule}": use lagrange, ratio, alternating or explicit`);
+  }
+  return new TaylorModel({ domain: D, coeffs: a, rem, order, bits, notes: [note], assumed });
+}
+
+// ../../packages/analytic/src/scope.js
+var NAMES = ["exp", "log", "log1p", "sqrt", "sin", "cos", "tan", "atan", "sinh", "cosh", "tanh"];
+function bitsForDigits(digits) {
+  return Math.ceil(Number(digits) * 3.3219280948873626) + 8;
+}
+function createScope(opts = {}) {
+  const bits = opts.bits ?? (opts.digits !== undefined ? bitsForDigits(opts.digits) : DEFAULTS.bits);
+  const order = opts.order ?? DEFAULTS.order;
+  const scope = {};
+  for (const name of NAMES) {
+    scope[name] = (x) => x instanceof TaylorModel ? exports_elementary[name](x) : enclose[name](x, bits);
+  }
+  scope.pow = (x, a) => x instanceof TaylorModel ? power2(x, toQ(a)) : refuse("bad-operand", "pow(x, a) here is for Taylor models; use Core's pow for numbers");
+  scope.model = (f, domain, o = {}) => {
+    const x = TaylorModel.x(Domain(domain), { order: o.order ?? order, bits: o.bits ?? bits });
+    const m = f(x);
+    return m instanceof TaylorModel ? m : TaylorModel.constant(x.domain, m, { order, bits });
+  };
+  scope.integral = (f, a, b, o = {}) => {
+    const lo = toQ(a);
+    const hi = toQ(b);
+    const n = o.pieces ?? 4;
+    const step = hi.subtract(lo).divide(new Rational(BigInt(n)));
+    let acc = Iv.point(new Rational(0n));
+    for (let i = 0;i < n; i++) {
+      const p = lo.add(step.multiply(new Rational(BigInt(i))));
+      const q = i === n - 1 ? hi : p.add(step);
+      acc = acc.add(Iv.from(scope.model(f, [p, q], o).integral()));
+    }
+    return acc.toRationalInterval();
+  };
+  scope.range = (f, interval, o = {}) => {
+    const v = Iv.from(interval);
+    const n = o.pieces ?? 4;
+    const step = v.width.divide(new Rational(BigInt(n)));
+    let acc = null;
+    for (let i = 0;i < n; i++) {
+      const p = v.lo.add(step.multiply(new Rational(BigInt(i))));
+      const q = i === n - 1 ? v.hi : p.add(step);
+      const r = Iv.from(scope.model(f, [p, q], o).range());
+      acc = acc ? acc.hull(r) : r;
+    }
+    return acc.toRationalInterval();
+  };
+  scope.pi = constants.pi(bits);
+  scope.e = constants.e(bits);
+  scope.TM = TaylorModel;
+  scope.Domain = Domain;
+  scope.series = (domain, spec) => series(domain, { order, bits, ...spec });
+  scope.AnalyticError = AnalyticError;
+  scope.bits = bits;
+  return scope;
+}
 // ../calc/src/session.js
 var { Integer: Integer2, Rational: Rational2, RationalInterval: RationalInterval2 } = exports_core;
 var BLOCKED = new Set([
@@ -6134,7 +7479,7 @@ function pow(base, exponent) {
     return new Integer3(1);
   return asExact(base).pow(n);
 }
-function factorial(value) {
+function factorial2(value) {
   return new Integer3(whole(value, "factorial")).factorial();
 }
 function abs2(value) {
@@ -6158,8 +7503,13 @@ function pm(center, radius) {
     return c;
   return c.add(new RationalInterval3(r.negate(), r));
 }
-var HELPERS = { pow, factorial, abs: abs2, bound, ceil, floor: floor2, pm };
+var HELPERS = { pow, factorial: factorial2, abs: abs2, bound, ceil, floor: floor2, pm };
 var LIBRARIES = {};
+function registerLibrary(name, exports) {
+  LIBRARIES[name] = exports;
+}
+var ANALYTIC = Object.freeze({ ...createScope({ digits: 30 }), createScope });
+registerLibrary("analytic", ANALYTIC);
 var IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
 var RESERVED = new Set(["x", "d", "lib", "expr", "taylor"]);
 function baseScope() {
@@ -6190,8 +7540,9 @@ function compile(code, functionNames = []) {
   const names = ["x", "d", "lib", "expr", "taylor", ...functionNames, ...Object.keys(baseScope()).filter((name) => IDENTIFIER.test(name) && !RESERVED.has(name)), ...BLOCKED_NAMES];
   const parameters = [...new Set(names)];
   const build = (body) => new Function("__ratreeScope", `"use strict";
-const { ${parameters.map((name) => `${name}`).join(", ")} } = __ratreeScope;
-${body}`);
+const { ${parameters.map((name) => `${name}`).join(", ")} } = __ratreeScope; {
+${body}
+}`);
   let fn;
   try {
     fn = build(`return (
@@ -6294,6 +7645,70 @@ ${fields.join(`
 `)}
 });` };
 }
+var ANALYTIC_SNIPPETS = [
+  {
+    name: "CEXP",
+    label: "eˣ certified to 30 digits",
+    code: [
+      "// @ratmath/analytic: exp(x) is a certified interval with at least 30 correct digits.",
+      "// The same goes for log, log1p, sqrt, sin, cos, tan, atan, sinh, cosh, tanh.",
+      "// An interval x gives an enclosure of the whole range: try CEXP(0:1).",
+      "return exp(x);"
+    ].join(`
+`)
+  },
+  {
+    name: "CSIN",
+    label: "sin x, 10 more digits per level",
+    code: [
+      "// createScope({ digits }) makes the analytic functions at another precision;",
+      "// d is the node's depth, so deeper nodes get more digits.",
+      "const A = createScope({ digits: 20 + 10 * Number(d) });",
+      "return A.sin(x);"
+    ].join(`
+`)
+  },
+  {
+    name: "EMODEL",
+    label: "e^(sin t) as a Taylor model on [0, 1]",
+    code: [
+      "// model(f, domain) builds a Taylor model of t -> f(t): a polynomial with exact",
+      "// coefficients plus a certified remainder that holds on the whole domain.",
+      "// Returning a model evaluates it at x, which must lie in [0, 1].",
+      "// A model also has .range(), .integral(), .describe() and .coefficients.",
+      "const m = model((t) => exp(sin(t)), R`0:1`);",
+      "return m;"
+    ].join(`
+`)
+  },
+  {
+    name: "ERFI",
+    label: "∫₀ˣ e^(−t²) dt, certified",
+    code: [
+      "// integral(f, a, b, { pieces }) encloses the integral by integrating Taylor models",
+      "// of f on pieces of [a, b]. Inside f, t is a model: use methods for arithmetic",
+      "// (t.multiply(t), .add, .subtract, .divide, .negate, .pow(n)).",
+      'if (x instanceof RationalInterval) throw new RangeError("ERFI needs a point x");',
+      "if (bound(x).numerator === 0n) return 0;",
+      "const pieces = 4 + 2 * Number(ceil(bound(x)).value);",
+      "return integral((t) => exp(t.multiply(t).negate()), 0, x, { pieces });"
+    ].join(`
+`)
+  },
+  {
+    name: "GSERIES",
+    label: "Σ (x/2)ᵏ as a user series (ratio rule)",
+    code: [
+      "// series(domain, spec) builds a model from your coefficients a_k and a rule for the",
+      '// tail after degree 12. With rule "ratio" you claim |a_(k+1)|·r ≤ q·|a_k| there',
+      "// (r = the domain's radius about the centre); the library checks the next 32 terms",
+      "// and refuses if the claim fails. The sum is 2/(2 - x) on [-1, 1].",
+      'const s = series(R`-1:1`, { centre: 0, coefficient: (k) => R`1/2^${k}`, rule: "ratio", q: R`1/2` });',
+      "return s;   // compare: R`2/(2 - ${x})`"
+    ].join(`
+`)
+  }
+];
 var SNIPPETS = [
   {
     name: "EXP",
@@ -6301,7 +7716,7 @@ var SNIPPETS = [
     code: [
       "// e^x = sum x^n/n! for n = 0..N, plus Taylor's remainder:",
       "// |R| <= M |x|^(N+1)/(N+1)!  with  M = max e^t on [0, x] <= 3^ceil|x|",
-      "const N = 12 + d;                  // more terms deeper in the tree",
+      "const N = 12 + Number(d);          // more terms deeper in the tree",
       "const s = sum(0, N, (n) => R`${pow(x, n)} / ${n}!`);",
       "const M = pow(3, ceil(bound(x)));",
       "return pm(s, R`${M} * ${bound(x)}^${N + 1} / ${N + 1}!`);"
@@ -6624,10 +8039,15 @@ class FunctionsPanel {
     const presets = this.element("select", "fn-presets");
     presets.title = "Start from a predefined function";
     presets.append(Object.assign(this.element("option", "", "Predefined…"), { value: "" }));
-    for (const snippet of SNIPPETS)
-      presets.append(Object.assign(this.element("option", "", snippet.label), { value: snippet.name }));
+    for (const [label, snippets] of [["Series with error bounds", SNIPPETS], ["Certified (@ratmath/analytic)", ANALYTIC_SNIPPETS]]) {
+      const group = this.element("optgroup");
+      group.label = label;
+      for (const snippet of snippets)
+        group.append(Object.assign(this.element("option", "", snippet.label), { value: snippet.name }));
+      presets.append(group);
+    }
     presets.addEventListener("change", () => {
-      const snippet = SNIPPETS.find(({ name }) => name === presets.value);
+      const snippet = [...SNIPPETS, ...ANALYTIC_SNIPPETS].find(({ name }) => name === presets.value);
       presets.value = "";
       if (snippet)
         this.openEditor({ code: snippet.code, preferredName: snippet.name });
@@ -8312,6 +9732,18 @@ class SternBrocotTreeVisualizer {
         <li>Code runs in a separate worker with no network access; anything taking over 3 seconds is stopped, and <em>Stop</em> ends it sooner. Functions are saved in this browser.</li>
       </ul>
 
+      <h3>Certified Functions (@ratmath/analytic)</h3>
+      <p>Function code can also use <code>@ratmath/analytic</code>, which proves its answers: every value is an interval guaranteed to contain the true one.</p>
+      <ul>
+        <li><code>exp</code>, <code>log</code>, <code>log1p</code>, <code>sqrt</code>, <code>sin</code>, <code>cos</code>, <code>tan</code>, <code>atan</code>, <code>sinh</code>, <code>cosh</code>, <code>tanh</code>: a number gives an interval with at least 30 correct digits (<code>return exp(x);</code>); an interval gives an enclosure of the range (<code>sin(-1:1)</code> is about ±0.8415, not the naive ±1.18). <code>pi</code> and <code>e</code> are 30-digit intervals.</li>
+        <li><code>createScope({ digits: 60 })</code> gives the same functions at another precision: <code>const A = createScope({ digits: 20 + 10 * Number(d) }); return A.sin(x);</code> adds digits as you go deeper.</li>
+        <li><code>model(t =&gt; exp(sin(t)), R\`0:1\`)</code> is a <em>Taylor model</em>: a polynomial with exact coefficients plus a certified remainder valid on all of [0, 1]. Returning a model evaluates it at <code>x</code>; it also has <code>.range()</code>, <code>.integral()</code>, <code>.integrate()</code>, <code>.describe()</code>, <code>.coefficients</code>, <code>.remainder</code>. Inside <code>t =&gt; …</code>, <code>t</code> is a model, so use methods for arithmetic: <code>t.multiply(t)</code>, <code>.add</code>, <code>.subtract</code>, <code>.divide</code>, <code>.negate</code>, <code>.pow(n)</code>.</li>
+        <li><code>integral(f, a, b, { pieces })</code> encloses ∫<sub>a</sub><sup>b</sup> f: <code>integral(t =&gt; exp(t.multiply(t).negate()), 0, x)</code>. <code>analytic.range(f, R\`0:3\`)</code> encloses the range of f (plain <code>range</code> stays Core's list maker).</li>
+        <li><code>series(domain, { coefficient: k =&gt; a_k, rule, … })</code> turns your own power series into a model; the rule bounds the tail: <code>"lagrange"</code> (with <code>M</code>), <code>"ratio"</code> (with <code>q</code>), <code>"alternating"</code> or <code>"explicit"</code> (with <code>error</code>). The library checks ratio and alternating rules on the next 32 terms and refuses if they fail.</li>
+        <li>When a hypothesis fails (log of an interval reaching 0, a point outside a model's domain) you get an error with the reason, never an unproven value.</li>
+        <li><em>Predefined… → Certified</em> has five worked examples: CEXP (e<sup>x</sup>), CSIN (more digits by depth), EMODEL (a Taylor model), ERFI (∫<sub>0</sub><sup>x</sup> e<sup>−t²</sup> dt), GSERIES (Σ (x/2)<sup>k</sup> with a ratio rule).</li>
+      </ul>
+
       <h3>What is the Stern-Brocot Tree?</h3>
       <p>The Stern-Brocot tree is a beautiful mathematical structure that organizes all rational numbers (fractions) in a binary tree format. Every rational number appears exactly once in the tree, and it's built using a simple but elegant process called the <strong>mediant operation</strong>.</p>
 
@@ -8433,7 +9865,7 @@ class SternBrocotTreeVisualizer {
   }
 }
 var sternBrocotApp;
-if (typeof document !== "undefined") {
+if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
   document.addEventListener("DOMContentLoaded", () => {
     sternBrocotApp = new SternBrocotTreeVisualizer;
   });

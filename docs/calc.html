@@ -200,6 +200,27 @@
         </div>
 
         <div class="help-section">
+          <h3>CERTIFIED FUNCTIONS: A (@RATMATH/ANALYTIC)</h3>
+          <p>Every answer is an interval proven to contain the true value (30 digits). Long intervals display
+            rounded outward, e.g. <code>1.2[3:6]</code> = 1.23:1.26; <code>display("exact")</code> shows the exact endpoints.
+            Type <code>help("analytic")</code> for the full list.</p>
+          <ul>
+            <li><code>A.exp(R`1/3`)</code> → <code>1.39561242508608952862812531960[2:3]</code>; also <code>A.log</code>, <code>log1p</code>,
+              <code>sqrt</code>, <code>sin</code>, <code>cos</code>, <code>tan</code>, <code>atan</code>, <code>sinh</code>, <code>cosh</code>, <code>tanh</code>, <code>A.pi</code>, <code>A.e</code></li>
+            <li><code>A.sin(R`-1:1`)</code> → about <code>±0.8414709848</code>: the true range, not the naive ±1.18</li>
+            <li><code>B = analytic({ digits: 60 })</code>, then <code>B.atan(R`1/5`)</code>: another precision</li>
+            <li><code>m = A.model(x =&gt; A.exp(A.sin(x)), R`0:1`)</code>: a Taylor model (exact polynomial + certified remainder on [0, 1]);
+              then <code>m.at(R`1/3`)</code>, <code>m.range()</code>, <code>m.integral()</code>, <code>m.describe()</code>, <code>m.coefficients</code>.
+              Inside, <code>x</code> is a model: use <code>.add</code>, <code>.multiply</code>, <code>.divide</code>, <code>.negate</code>, <code>.pow(n)</code></li>
+            <li><code>A.integral(x =&gt; A.exp(A.sin(x)), 0, 1)</code> → <code>1.631869608418051[16…:53…]</code>;
+              <code>A.range(x =&gt; x.multiply(A.cos(x)), R`0:3`)</code></li>
+            <li><code>A.series(R`-1/2:1/2`, { centre: 0, coefficient: k =&gt; R`1/2^${k}`, rule: "ratio", q: R`1/4` })</code>: your own
+              power series with a tail rule (<code>"lagrange"</code>, <code>"ratio"</code>, <code>"alternating"</code>, <code>"explicit"</code>)</li>
+            <li><code>A.log(R`0:1`)</code> → <code>AnalyticError</code> with the reason: failed hypotheses never give unproven values</li>
+          </ul>
+        </div>
+
+        <div class="help-section">
           <h3>DISPLAY</h3>
           <ul>
             <li><code>display("both" | "exact" | "decimal" | "mixed" | "cf" | "sci")</code> for every result

@@ -9,9 +9,15 @@
  *                         seq, range, ExactList, exact, parseNumber, ...
  *   helpers               pow, factorial, abs, bound, ceil, floor, pm, expr, taylor
  *   other functions       by name: G(value) or G() for G(x)
- *   lib                   all of the above as one object; future libraries such
- *                         as @ratmath/analytic are added to it (and by name)
- *                         without changing existing code
+ *   analytic              @ratmath/analytic at 30 digits: exp, log, log1p, sqrt,
+ *                         sin, cos, tan, atan, sinh, cosh, tanh (certified
+ *                         intervals for numbers, Taylor models for models),
+ *                         model, integral, series, pi, e, TM, Domain; also by
+ *                         name, except range (Core's range wins: use
+ *                         analytic.range). createScope({ digits }) makes another.
+ *   lib                   all of the above as one object
+ * User code runs in its own block, so it may declare any of these names
+ * (const e = ...) without a clash.
  * It returns a Core value (Integer, Rational, RationalInterval), a bigint or
  * safe integer, a literal string, or an object with .at(x) (a model, evaluated
  * at x).
@@ -20,6 +26,7 @@
  * user code cannot reach the network or the worker's messaging.
  */
 import * as Core from "@ratmath/core";
+import { createScope } from "@ratmath/analytic";
 import { evaluateExpression, magnitude } from "./named-functions.js";
 
 const { Integer, Rational, RationalInterval } = Core;
@@ -97,6 +104,10 @@ export function registerLibrary(name, exports) {
   LIBRARIES[name] = exports;
 }
 
+/** @ratmath/analytic at 30 digits, plus createScope for other precisions. */
+export const ANALYTIC = Object.freeze({ ...createScope({ digits: 30 }), createScope });
+registerLibrary("analytic", ANALYTIC);
+
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
 const RESERVED = new Set(["x", "d", "lib", "expr", "taylor"]);
 
@@ -111,7 +122,8 @@ function baseScope() {
 }
 
 // new Function adds "function anonymous(__ratreeScope\n) {\n"; compile adds
-// "use strict" and the scope destructuring, plus "return (" for an expression.
+// "use strict" and the scope destructuring (which opens the block the user's
+// code runs in), plus "return (" for an expression.
 const BODY_OFFSET = 4;
 const EXPRESSION_OFFSET = 5;
 
@@ -135,7 +147,7 @@ export function compile(code, functionNames = []) {
   if (!source.trim()) throw new SyntaxError("the code is empty");
   const names = ["x", "d", "lib", "expr", "taylor", ...functionNames, ...Object.keys(baseScope()).filter((name) => IDENTIFIER.test(name) && !RESERVED.has(name)), ...BLOCKED_NAMES];
   const parameters = [...new Set(names)];
-  const build = (body) => new Function("__ratreeScope", `"use strict";\nconst { ${parameters.map((name) => `${name}`).join(", ")} } = __ratreeScope;\n${body}`);
+  const build = (body) => new Function("__ratreeScope", `"use strict";\nconst { ${parameters.map((name) => `${name}`).join(", ")} } = __ratreeScope; {\n${body}\n}`);
   let fn;
   try {
     fn = build(`return (\n${source}\n);`);
@@ -242,6 +254,70 @@ export function migrateDefinition(definition) {
   return { name: definition.name, code: `// migrated Taylor definition: sum of term for n = 0..terms\nreturn taylor({\n${fields.join("\n")}\n});` };
 }
 
+/**
+ * Predefined functions that use @ratmath/analytic (shown as their own group):
+ * certified values, Taylor models, integrals and user series.
+ */
+export const ANALYTIC_SNIPPETS = [
+  {
+    name: "CEXP",
+    label: "e\u02e3 certified to 30 digits",
+    code: [
+      "// @ratmath/analytic: exp(x) is a certified interval with at least 30 correct digits.",
+      "// The same goes for log, log1p, sqrt, sin, cos, tan, atan, sinh, cosh, tanh.",
+      "// An interval x gives an enclosure of the whole range: try CEXP(0:1).",
+      "return exp(x);",
+    ].join("\n"),
+  },
+  {
+    name: "CSIN",
+    label: "sin x, 10 more digits per level",
+    code: [
+      "// createScope({ digits }) makes the analytic functions at another precision;",
+      "// d is the node's depth, so deeper nodes get more digits.",
+      "const A = createScope({ digits: 20 + 10 * Number(d) });",
+      "return A.sin(x);",
+    ].join("\n"),
+  },
+  {
+    name: "EMODEL",
+    label: "e^(sin t) as a Taylor model on [0, 1]",
+    code: [
+      "// model(f, domain) builds a Taylor model of t -> f(t): a polynomial with exact",
+      "// coefficients plus a certified remainder that holds on the whole domain.",
+      "// Returning a model evaluates it at x, which must lie in [0, 1].",
+      "// A model also has .range(), .integral(), .describe() and .coefficients.",
+      "const m = model((t) => exp(sin(t)), R`0:1`);",
+      "return m;",
+    ].join("\n"),
+  },
+  {
+    name: "ERFI",
+    label: "\u222b\u2080\u02e3 e^(\u2212t\u00b2) dt, certified",
+    code: [
+      "// integral(f, a, b, { pieces }) encloses the integral by integrating Taylor models",
+      "// of f on pieces of [a, b]. Inside f, t is a model: use methods for arithmetic",
+      "// (t.multiply(t), .add, .subtract, .divide, .negate, .pow(n)).",
+      "if (x instanceof RationalInterval) throw new RangeError(\"ERFI needs a point x\");",
+      "if (bound(x).numerator === 0n) return 0;",
+      "const pieces = 4 + 2 * Number(ceil(bound(x)).value);",
+      "return integral((t) => exp(t.multiply(t).negate()), 0, x, { pieces });",
+    ].join("\n"),
+  },
+  {
+    name: "GSERIES",
+    label: "\u03a3 (x/2)\u1d4f as a user series (ratio rule)",
+    code: [
+      "// series(domain, spec) builds a model from your coefficients a_k and a rule for the",
+      "// tail after degree 12. With rule \"ratio\" you claim |a_(k+1)|\u00b7r \u2264 q\u00b7|a_k| there",
+      "// (r = the domain's radius about the centre); the library checks the next 32 terms",
+      "// and refuses if the claim fails. The sum is 2/(2 - x) on [-1, 1].",
+      "const s = series(R`-1:1`, { centre: 0, coefficient: (k) => R`1/2^${k}`, rule: \"ratio\", q: R`1/2` });",
+      "return s;   // compare: R`2/(2 - ${x})`",
+    ].join("\n"),
+  },
+];
+
 /** Predefined functions as JavaScript snippets that open in the editor. */
 export const SNIPPETS = [
   {
@@ -250,7 +326,7 @@ export const SNIPPETS = [
     code: [
       "// e^x = sum x^n/n! for n = 0..N, plus Taylor's remainder:",
       "// |R| <= M |x|^(N+1)/(N+1)!  with  M = max e^t on [0, x] <= 3^ceil|x|",
-      "const N = 12 + d;                  // more terms deeper in the tree",
+      "const N = 12 + Number(d);          // more terms deeper in the tree",
       "const s = sum(0, N, (n) => R`${pow(x, n)} / ${n}!`);",
       "const M = pow(3, ceil(bound(x)));",
       "return pm(s, R`${M} * ${bound(x)}^${N + 1} / ${N + 1}!`);",

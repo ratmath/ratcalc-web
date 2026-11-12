@@ -238,6 +238,11 @@
                     <code>seq</code>, <code>range</code>, <code>exact</code>, …; helpers <code>pow</code> (x^0 = 1), <code>factorial</code>,
                     <code>abs</code>, <code>bound</code> (max |v|), <code>ceil</code>, <code>floor</code>, <code>pm(center, radius)</code>,
                     <code>expr("x^2 - F")</code>; your other functions by name, e.g. <code>G(x)</code>. Return an exact value or interval.</p>
+                <p class="fn-modal-scope">Certified functions (<code>@ratmath/analytic</code>, 30 digits): <code>exp</code>, <code>log</code>,
+                    <code>sqrt</code>, <code>sin</code>, <code>cos</code>, <code>atan</code>, … return proven intervals, e.g.
+                    <code>exp(x)</code>; <code>model(t =&gt; exp(sin(t)), R`0:1`)</code> (a Taylor model; returning it evaluates it at x);
+                    <code>integral(t =&gt; exp(t.multiply(t).negate()), 0, x)</code>; <code>series(…)</code>, <code>pi</code>, <code>e</code>,
+                    <code>analytic.range(f, R`0:1`)</code>, <code>createScope({ digits: 60 })</code>. See <em>Predefined… → Certified</em> and Help.</p>
                 <div id="functionMessage" class="fn-message"></div>
                 <div class="fn-modal-buttons">
                     <button type="button" id="functionTest" class="nav-btn">Test at this node</button>

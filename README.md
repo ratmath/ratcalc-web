@@ -69,8 +69,15 @@ Predefined… snippet) opens an editor: a capitalised name and code that is a
 function body or a single expression. In scope: `x` (argument), `d` (depth),
 every Core export, helpers `pow` (x⁰ = 1), `factorial`, `abs`, `bound`,
 `ceil`, `floor`, `pm(center, radius)`, `expr("…")`, and the other functions by
-name; `lib` collects them, so later libraries (such as the planned analytic
-package) can be added without changing saved code. Code runs in a Web Worker
+name; `lib` collects them. `@ratmath/analytic` is in scope at 30 digits
+(also as `analytic`): `exp`, `log`, `log1p`, `sqrt`, `sin`, `cos`, `tan`,
+`atan`, `sinh`, `cosh`, `tanh` (certified intervals), `model(f, domain)`
+(a Taylor model; returning one evaluates it at x), `integral(f, a, b)`,
+`series(domain, spec)`, `pi`, `e`, `createScope({ digits })`; Core's `range`
+keeps its name, so the enclosure is `analytic.range`. User code runs in its
+own block, so it may declare any of these names. The Predefined… menu's
+"Certified" group has five examples (CEXP, CSIN, EMODEL, ERFI, GSERIES) and
+Help has a "Certified Functions" section. Code runs in a Web Worker
 (`src/ratree-worker.js`, network globals removed) with a 3-second limit and a
 Stop button. In the expression box `F` means `F(x)` and `F(expr)` applies `F`.
 Predefined snippets give eˣ, sin, cos (Lagrange remainder), ln(1+x),
