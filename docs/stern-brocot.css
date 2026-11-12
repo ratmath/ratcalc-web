@@ -1136,3 +1136,127 @@ header p {
     overflow-y: auto;
     font-size: 0.8rem;
 }
+
+/* JavaScript function list and editor */
+.fn-row {
+    background: white;
+    border: 1px solid #dfe6ee;
+    border-radius: 6px;
+    padding: 0.45rem 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.fn-row .fn-head {
+    display: flex;
+    gap: 0.4rem;
+    align-items: baseline;
+    min-width: 0;
+}
+
+.fn-title {
+    font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+}
+
+.fn-summary {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.75rem;
+    color: #7f8c8d;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fn-edit {
+    font: inherit;
+    font-size: 0.75rem;
+    padding: 0.1rem 0.45rem;
+    border: 1px solid #bdc3c7;
+    border-radius: 4px;
+    background: white;
+    cursor: pointer;
+}
+
+.fn-modal-content {
+    max-width: 760px;
+}
+
+.fn-modal-label {
+    display: block;
+    font-weight: bold;
+    color: #34495e;
+    margin: 0.6rem 0 0.3rem;
+    font-size: 0.9rem;
+}
+
+.fn-modal-name {
+    width: 10rem;
+    font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+    font-weight: bold;
+    text-transform: uppercase;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid #bdc3c7;
+    border-radius: 4px;
+}
+
+.fn-modal-code {
+    width: 100%;
+    box-sizing: border-box;
+    font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+    font-size: 0.85rem;
+    line-height: 1.45;
+    padding: 0.5rem;
+    border: 1px solid #bdc3c7;
+    border-radius: 4px;
+    resize: vertical;
+    tab-size: 2;
+}
+
+.fn-modal-scope {
+    font-size: 0.78rem;
+    color: #555;
+    margin: 0.4rem 0;
+}
+
+.fn-message {
+    min-height: 1.4rem;
+    font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+    font-size: 0.82rem;
+    margin: 0.4rem 0;
+    overflow-wrap: anywhere;
+}
+
+.fn-message-error { color: #c0392b; }
+.fn-message-ok { color: #1e7e34; }
+.fn-message-busy,
+.fn-message-info { color: #7f8c8d; }
+
+.fn-modal-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.fn-save { background: linear-gradient(135deg, #27ae60 0%, #1e8449 100%); }
+.fn-cancel { background: linear-gradient(135deg, #95a5a6 0%, #7f8c8d 100%); }
+.fn-stop { background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%); }
+.fn-stop[hidden], .compute-status[hidden] { display: none; }
+
+.compute-status {
+    margin-left: 0.5rem;
+    font-size: 0.8rem;
+    color: #7f8c8d;
+}
+
+.fn-stop-inline {
+    font: inherit;
+    font-size: 0.75rem;
+    padding: 0 0.4rem;
+    border: 1px solid #e74c3c;
+    color: #c0392b;
+    background: white;
+    border-radius: 4px;
+    cursor: pointer;
+}

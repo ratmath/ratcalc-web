@@ -10,6 +10,7 @@ import { formatScientific } from "ratcalc/session";
 import { Integer } from "@ratmath/core";
 import { evaluateExpression } from "./named-functions.js";
 import { FunctionsPanel } from "./functions-panel.js";
+import { FunctionRunner } from "./ratree-client.js";
 import { allFormats, boundedDecimal, compact } from "./compact-display.js";
 
 /**
@@ -44,14 +45,26 @@ class SternBrocotTreeVisualizer {
 
     this.initializeElements();
     const panelRoot = document.getElementById("functionsPanel");
+    this.runner = new FunctionRunner({ onBusy: (busy) => this.setBusy(busy) });
     if (panelRoot) {
       if (window.innerWidth <= 768) document.getElementById("functionsDetails")?.removeAttribute("open");
+      const byId = (id) => document.getElementById(id);
       this.functionsPanel = new FunctionsPanel(panelRoot, {
-        context: () => this.functionContext(),
+        dialog: {
+          modal: byId("functionModal"), title: byId("functionTitle"), name: byId("functionName"), code: byId("functionCode"),
+          message: byId("functionMessage"), test: byId("functionTest"), save: byId("functionSave"),
+          cancel: byId("functionCancel"), close: byId("closeFunction"), stop: byId("functionStop"),
+        },
+        runner: this.runner,
+        context: () => {
+          const { vars } = this.functionContext();
+          return { x: vars.x, d: Number(vars.d.value) };
+        },
         show: (element, value) => this.showValue(element, value),
         onChange: () => this.updateExpressionResult(),
       });
     }
+    document.getElementById("computeStop")?.addEventListener("click", () => this.runner.stop());
     this.setupEventListeners();
     this.setupTooltips();
     this.loadFromURL(); // Check for URL hash
@@ -88,6 +101,7 @@ class SternBrocotTreeVisualizer {
       valueModal: document.getElementById("valueModal"),
       valueContent: document.getElementById("valueContent"),
       closeValue: document.getElementById("closeValue"),
+      functionModalOpen: () => document.getElementById("functionModal")?.style.display === "block",
       helpContent: document.getElementById("helpContent"),
       closeHelp: document.getElementById("closeHelp"),
       fractionTooltip: document.getElementById("fractionTooltip"),
@@ -227,6 +241,7 @@ class SternBrocotTreeVisualizer {
         this.closeModal("farey");
         this.closeModal("help");
         this.closeModal("value");
+        if (this.elements.functionModalOpen?.()) this.functionsPanel.closeEditor();
       }
     });
 
@@ -1875,7 +1890,6 @@ class SternBrocotTreeVisualizer {
     const depth = this.currentFraction.sternBrocotDepth();
     return {
       vars: { x: this.currentFraction.toRational(), d: new Integer(Number.isFinite(depth) ? depth : 0) },
-      functions: this.functionsPanel ? this.functionsPanel.map() : null,
     };
   }
 
@@ -1938,27 +1952,46 @@ class SternBrocotTreeVisualizer {
     this.elements.valueModal.style.display = "block";
   }
 
-  updateExpressionResult() {
-    this.functionsPanel?.refresh();
-    const expression = this.elements.expressionInput.value.trim();
+  /** Show "Computing… Stop" only when work takes a moment. */
+  setBusy(busy) {
+    const status = document.getElementById("computeStatus");
+    if (!status) return;
+    clearTimeout(this.busyTimer);
+    if (busy) this.busyTimer = setTimeout(() => { status.hidden = false; }, 150);
+    else status.hidden = true;
+  }
 
-    if (!expression) {
-      this.elements.expressionResult.onclick = null;
-      this.elements.expressionResult.classList.remove("value-link");
-      this.elements.expressionResult.textContent = "Enter an expression above";
+  /** Recompute the function values and the expression box in the worker. */
+  async updateExpressionResult() {
+    const element = this.elements.expressionResult;
+    const expression = this.elements.expressionInput.value.trim();
+    const definitions = this.functionsPanel ? this.functionsPanel.definitions : [];
+    const generation = (this.evaluationGeneration = (this.evaluationGeneration ?? 0) + 1);
+    if (!expression && definitions.length === 0) {
+      element.onclick = null;
+      element.classList.remove("value-link");
+      element.textContent = "Enter an expression above";
       return;
     }
-
-    try {
-      const { vars, functions } = this.functionContext();
-      const result = evaluateAt(expression, vars.x, { depth: Number(vars.d.value), functions });
-
-      this.showValue(this.elements.expressionResult, result);
-    } catch (error) {
-      this.elements.expressionResult.onclick = null;
-      this.elements.expressionResult.classList.remove("value-link");
-      this.elements.expressionResult.textContent = `Error: ${error.message}`;
+    const { vars } = this.functionContext();
+    const result = await this.runner.request({ type: "all", definitions, expression, x: vars.x, d: Number(vars.d.value) });
+    if (result.superseded || generation !== this.evaluationGeneration) return;
+    if (!result.ok) {
+      this.functionsPanel?.setStatuses(definitions.map(({ name }) => ({ name, ok: false, error: result.error })));
+      this.showExpressionError(expression ? result.error : "Enter an expression above");
+      return;
     }
+    this.functionsPanel?.setStatuses(result.statuses);
+    if (!expression) return this.showExpressionError("Enter an expression above");
+    if (result.expression.ok) this.showValue(element, result.expression.value);
+    else this.showExpressionError(`Error: ${result.expression.error}`);
+  }
+
+  showExpressionError(text) {
+    const element = this.elements.expressionResult;
+    element.onclick = null;
+    element.classList.remove("value-link");
+    element.textContent = text;
   }
 
   updateBoundaryDisplay() {
@@ -2007,14 +2040,14 @@ class SternBrocotTreeVisualizer {
   showHelpModal() {
     this.elements.helpContent.innerHTML = `
       <h3>Expressions and Named Functions</h3>
-      <p>The expression box evaluates exactly at the current node: <code>x</code> is the node's value and <code>d</code> its depth. Literals use RiX spelling (<code>3/4</code>, <code>0.#3</code>, <code>2.5_^-2</code>, <code>1:2</code>); operators are <code>+ - * / ^ ! :</code>.</p>
+      <p>The expression box evaluates exactly at the current node: <code>x</code> is the node's value and <code>d</code> its depth. Literals use RiX spelling (<code>3/4</code>, <code>0.#3</code>, <code>2.5_^-2</code>, <code>1:2</code>); operators are <code>+ - * / ^ ! :</code>. <code>F</code> alone means <code>F(x)</code>; <code>F(expr)</code> evaluates <code>expr</code> and applies <code>F</code>; calls nest: <code>F(G(x) + 1)</code>.</p>
       <ul>
-        <li>The <strong>Functions</strong> panel (below Help) defines capitalised functions. <code>F</code> alone means <code>F(x)</code>; <code>F(expr)</code> evaluates <code>expr</code> and applies <code>F</code>; calls nest: <code>F(G(x) + 1)</code>.</li>
-        <li><strong>Formula</strong>: a rational expression in <code>x</code>, e.g. <code>x^2 - 2</code>.</li>
-        <li><strong>Taylor</strong>: <code>term(x, n)</code> is summed for <code>n = 0..N</code>; <code>N</code> is a number or a formula in <code>d</code> (<code>5*d</code> gives N = 15 at depth 3). The remainder bound comes from either an <strong>Error formula</strong> <code>error(x, n)</code> evaluated at <code>n = N</code>, or <strong>Lagrange</strong> mode (Taylor's theorem): <code>M · |x|^k / k!</code>, where <code>M(x, n)</code> bounds the k-th derivative between 0 and x and <code>k</code> (default <code>n+1</code>; <code>2*n+3</code> for sin's odd series) is the order after the last power used. The result is the exact sum ± that bound, an interval. A domain such as <code>-1:1</code> says where the bound holds; x outside it is an error.</li>
-        <li>Intervals propagate exactly through interval arithmetic: <code>EXP(0:1)</code> encloses e<sup>x</sup> on [0, 1] (alternating series give wide but valid enclosures).</li>
-        <li><strong>Predefined</strong> adds editable definitions with checked remainder bounds: e<sup>x</sup>, sin, cos (all x), ln(1+x), 1/(1−x), √(1+x) (|x| &lt; 1), arctan (|x| ≤ 1), and the formulas x², 1/x.</li>
-        <li>Built-ins for bounds: <code>ABS</code>, <code>FLOOR</code>, <code>CEIL</code>, <code>MIN</code>, <code>MAX</code>, <code>BINOM(a, k)</code>.</li>
+        <li><strong>Functions</strong> (panel below Help): <em>+ Add function</em> opens an editor with a capitalised name and JavaScript code — a function body, or one expression that is returned automatically. <em>Test at this node</em> shows the value; errors show the line.</li>
+        <li>In scope: <code>x</code> (the argument), <code>d</code> (depth), all of RatMath Core (<code>R</code>, <code>Rational</code>, <code>Integer</code>, <code>RationalInterval</code>, <code>sum</code>, <code>product</code>, <code>seq</code>, <code>range</code>, <code>exact</code>, …), helpers <code>pow</code> (x<sup>0</sup> = 1), <code>factorial</code>, <code>abs</code>, <code>bound</code> (max |v|), <code>ceil</code>, <code>floor</code>, <code>pm(center, radius)</code>, <code>expr("…")</code> for expression-box syntax, and your other functions by name (<code>G(x)</code>, or <code>G()</code> for G at x).</li>
+        <li>Return an exact value or an interval (a whole JavaScript number or bigint is fine; 0.1 is refused as inexact).</li>
+        <li><strong>Predefined…</strong> opens editable snippets: e<sup>x</sup>, sin, cos with Taylor's Lagrange remainder (|R| ≤ M·|x|<sup>k</sup>/k!), ln(1+x), 1/(1−x), √(1+x) with geometric tails, arctan with the alternating-series bound, a Newton step, x², 1/x. Each states its domain and refuses x outside it.</li>
+        <li>Intervals propagate: <code>EXP(0:1)</code> encloses e<sup>x</sup> on [0, 1] (alternating series give wide but valid enclosures).</li>
+        <li>Code runs in a separate worker with no network access; anything taking over 3 seconds is stopped, and <em>Stop</em> ends it sooner. Functions are saved in this browser.</li>
       </ul>
 
       <h3>What is the Stern-Brocot Tree?</h3>

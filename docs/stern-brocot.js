@@ -6010,6 +6010,8 @@ function checkDomain(definition, x, context) {
 function applyFunction(definition, argument, context) {
   const vars = { ...context.vars, x: argument };
   const inner = { ...context, vars, depth: (context.depth ?? 0) + 1 };
+  if (definition.kind === "js")
+    return definition.apply(argument, inner);
   if (definition.kind === "formula")
     return evaluateExpression(definition.formula, inner);
   if (definition.kind !== "taylor")
@@ -6076,138 +6078,516 @@ function nameProblem(name, used) {
     return `${name} is already defined`;
   return null;
 }
-var PRESETS = [
-  { name: "EXP", label: "eˣ", kind: "taylor", term: "x^n/n!", terms: "10", errorMode: "lagrange", bound: "3^CEIL(ABS(x))", order: "n+1", domain: "", note: "all x; Lagrange with |f^(k)| = e^ξ ≤ 3^⌈|x|⌉" },
-  { name: "SIN", label: "sin x", kind: "taylor", term: "(-1)^n * x^(2*n+1)/(2*n+1)!", terms: "8", errorMode: "lagrange", bound: "1", order: "2*n+3", domain: "", note: "all x; Lagrange with |f^(k)| ≤ 1" },
-  { name: "COS", label: "cos x", kind: "taylor", term: "(-1)^n * x^(2*n)/(2*n)!", terms: "8", errorMode: "lagrange", bound: "1", order: "2*n+2", domain: "", note: "all x; Lagrange with |f^(k)| ≤ 1" },
-  { name: "LN1P", label: "ln(1 + x)", kind: "taylor", term: "(-1)^n * x^(n+1)/(n+1)", terms: "20", error: "ABS(x)^(n+2)/((n+2)*(1 - ABS(x)))", domain: "-1:1", note: "|x| < 1" },
-  { name: "ATAN", label: "arctan x", kind: "taylor", term: "(-1)^n * x^(2*n+1)/(2*n+1)", terms: "20", error: "ABS(x)^(2*n+3)/(2*n+3)", domain: "-1:1", note: "|x| ≤ 1" },
-  { name: "GEOM", label: "1/(1 − x)", kind: "taylor", term: "x^n", terms: "20", error: "ABS(x)^(n+1)/(1 - ABS(x))", domain: "-1:1", note: "|x| < 1" },
-  { name: "SQRT1P", label: "√(1 + x)", kind: "taylor", term: "BINOM(1/2, n) * x^n", terms: "20", error: "ABS(BINOM(1/2, n+1)) * ABS(x)^(n+1)/(1 - ABS(x))", domain: "-1:1", note: "|x| < 1" },
-  { name: "SQ", label: "x²", kind: "formula", formula: "x^2", note: "formula" },
-  { name: "RECIP", label: "1/x", kind: "formula", formula: "1/x", note: "formula" }
+
+// src/ratree-scope.js
+var { Integer: Integer3, Rational: Rational3, RationalInterval: RationalInterval3 } = exports_core;
+var { default: _coreDefault, ...coreExports } = exports_core;
+var BLOCKED_NAMES = [
+  "fetch",
+  "XMLHttpRequest",
+  "WebSocket",
+  "EventSource",
+  "importScripts",
+  "Worker",
+  "SharedWorker",
+  "postMessage",
+  "close",
+  "self",
+  "globalThis",
+  "navigator",
+  "location",
+  "caches",
+  "indexedDB",
+  "BroadcastChannel",
+  "MessageChannel",
+  "require",
+  "process",
+  "Bun",
+  "Deno"
+];
+var asExact = (value) => {
+  if (value instanceof Integer3 || value instanceof Rational3 || value instanceof RationalInterval3)
+    return value;
+  if (value?.isCertifiedApproximation === true)
+    return value;
+  if (typeof value === "bigint")
+    return new Integer3(value);
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value))
+      throw new TypeError(`${value} is an inexact JavaScript number; use R\`…\` or new Rational(p, q)`);
+    return new Integer3(value);
+  }
+  if (typeof value === "string")
+    return parseNumber(value);
+  throw new TypeError(`expected an exact value, got ${value === null ? "null" : typeof value}`);
+};
+var asRational4 = (value) => value instanceof Integer3 ? value.toRational() : value;
+var whole = (value, name) => {
+  const exact = asExact(value);
+  if (!(exact instanceof Integer3))
+    throw new TypeError(`${name} needs a whole number`);
+  return exact.value;
+};
+function pow(base, exponent) {
+  const n = whole(exponent, "pow's exponent");
+  if (n === 0n)
+    return new Integer3(1);
+  return asExact(base).pow(n);
+}
+function factorial(value) {
+  return new Integer3(whole(value, "factorial")).factorial();
+}
+function abs2(value) {
+  return evaluateExpression("ABS(x)", { vars: { x: asExact(value) }, functions: null });
+}
+function bound(value) {
+  return magnitude(asExact(value));
+}
+function ceil(value) {
+  const exact = asExact(value);
+  return new Integer3(exact instanceof RationalInterval3 ? exact.high.ceil() : asRational4(exact).ceil());
+}
+function floor2(value) {
+  const exact = asExact(value);
+  return new Integer3(exact instanceof RationalInterval3 ? exact.low.floor() : asRational4(exact).floor());
+}
+function pm(center, radius) {
+  const r = bound(radius);
+  const c = asExact(center);
+  if (r.equals(Rational3.zero))
+    return c;
+  return c.add(new RationalInterval3(r.negate(), r));
+}
+var HELPERS = { pow, factorial, abs: abs2, bound, ceil, floor: floor2, pm };
+var LIBRARIES = {};
+var IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
+var RESERVED = new Set(["x", "d", "lib", "expr", "taylor"]);
+function baseScope() {
+  const scope = { ...coreExports, ...HELPERS };
+  for (const [name, exports] of Object.entries(LIBRARIES)) {
+    scope[name] = exports;
+    for (const [key, value] of Object.entries(exports))
+      if (!(key in scope))
+        scope[key] = value;
+  }
+  return scope;
+}
+var BODY_OFFSET = 4;
+var EXPRESSION_OFFSET = 5;
+function errorLine(error, offset = BODY_OFFSET) {
+  const v8 = /<anonymous>:(\d+):\d+/.exec(String(error?.stack ?? ""));
+  const jsc = /at anonymous \(.*?:(\d+):\d+\)/.exec(String(error?.stack ?? ""));
+  const raw = v8 ? Number(v8[1]) : jsc ? Number(jsc[1]) : Number.isFinite(error?.lineNumber) ? error.lineNumber : null;
+  if (raw === null)
+    return null;
+  const line = raw - offset;
+  return line >= 1 ? line : null;
+}
+function compile(code, functionNames = []) {
+  const source = String(code ?? "");
+  if (!source.trim())
+    throw new SyntaxError("the code is empty");
+  const names = ["x", "d", "lib", "expr", "taylor", ...functionNames, ...Object.keys(baseScope()).filter((name) => IDENTIFIER.test(name) && !RESERVED.has(name)), ...BLOCKED_NAMES];
+  const parameters = [...new Set(names)];
+  const build = (body) => new Function("__ratreeScope", `"use strict";
+const { ${parameters.map((name) => `${name}`).join(", ")} } = __ratreeScope;
+${body}`);
+  let fn;
+  try {
+    fn = build(`return (
+${source}
+);`);
+    fn.lineOffset = EXPRESSION_OFFSET;
+  } catch {
+    fn = build(source);
+    fn.lineOffset = BODY_OFFSET;
+  }
+  return fn;
+}
+function normalise(result, x) {
+  if (result && typeof result === "object" && typeof result.at === "function" && !(result instanceof Rational3) && !(result instanceof Integer3)) {
+    return normalise(result.at(x), x);
+  }
+  if (result === undefined)
+    throw new TypeError("the code returned nothing; add return …");
+  const exact = asExact(result);
+  return exact instanceof Rational3 && exact.denominator === 1n ? new Integer3(exact.numerator) : exact;
+}
+function buildFunctions(definitions, depth) {
+  const compiled = new Map;
+  const errors = new Map;
+  for (const { name, code } of definitions) {
+    try {
+      compiled.set(name, compile(code, definitions.map((definition) => definition.name)));
+    } catch (error) {
+      error.functionName = name;
+      errors.set(name, error);
+    }
+  }
+  const evaluatorFunctions = new Map;
+  const callables = {};
+  const scopeFor = (x, d) => {
+    const scope = { ...baseScope(), ...callables, x, d, lib: { ...baseScope() } };
+    for (const name of BLOCKED_NAMES)
+      scope[name] = undefined;
+    scope.expr = (text) => evaluateExpression(String(text), { vars: { x, d }, functions: evaluatorFunctions });
+    scope.taylor = (spec) => evaluateExpression("T", {
+      vars: { x, d },
+      functions: new Map([...evaluatorFunctions, ["T", { kind: "taylor", ...spec, terms: spec.terms ?? spec.N }]])
+    });
+    return scope;
+  };
+  let callDepth = 0;
+  const run = (name, x, d) => {
+    if (errors.has(name))
+      throw errors.get(name);
+    if (callDepth > 40)
+      throw new RangeError("functions call each other too deeply (a cycle?)");
+    callDepth += 1;
+    try {
+      return normalise(compiled.get(name)(scopeFor(x, d)), x);
+    } catch (error) {
+      if (!error.functionName) {
+        error.functionName = name;
+        error.functionLine = errorLine(error, compiled.get(name)?.lineOffset);
+      }
+      throw error;
+    } finally {
+      callDepth -= 1;
+    }
+  };
+  const d = new Integer3(depth);
+  let currentX = null;
+  for (const { name } of definitions) {
+    callables[name] = (...args) => run(name, args.length ? asExact(args[0]) : currentX, d);
+    evaluatorFunctions.set(name, { kind: "js", apply: (argument) => run(name, argument, d) });
+  }
+  return {
+    functions: evaluatorFunctions,
+    errors,
+    call(name, x) {
+      currentX = x;
+      return run(name, x, d);
+    },
+    evaluate(expression, x) {
+      currentX = x;
+      return evaluateExpression(expression, { vars: { x, d }, functions: evaluatorFunctions });
+    }
+  };
+}
+function describeError(error) {
+  const where = [error?.functionName, error?.functionLine ? `line ${error.functionLine}` : null].filter(Boolean).join(", ");
+  return `${where ? `${where}: ` : ""}${error?.message ?? String(error)}`;
+}
+function migrateDefinition(definition) {
+  if (definition.code !== undefined)
+    return { name: definition.name, code: String(definition.code) };
+  const quote = (text) => JSON.stringify(String(text ?? ""));
+  if (definition.kind === "formula") {
+    return { name: definition.name, code: `// migrated formula
+return expr(${quote(definition.formula)});` };
+  }
+  const fields = ["term", "terms", "errorMode", "error", "bound", "order", "domain"].filter((field) => definition[field] !== undefined && definition[field] !== "").map((field) => `  ${field}: ${quote(definition[field])},`);
+  return { name: definition.name, code: `// migrated Taylor definition: sum of term for n = 0..terms
+return taylor({
+${fields.join(`
+`)}
+});` };
+}
+var SNIPPETS = [
+  {
+    name: "EXP",
+    label: "eˣ (Taylor, Lagrange bound)",
+    code: [
+      "// e^x = sum x^n/n! for n = 0..N, plus Taylor's remainder:",
+      "// |R| <= M |x|^(N+1)/(N+1)!  with  M = max e^t on [0, x] <= 3^ceil|x|",
+      "const N = 12 + d;                  // more terms deeper in the tree",
+      "const s = sum(0, N, (n) => R`${pow(x, n)} / ${n}!`);",
+      "const M = pow(3, ceil(bound(x)));",
+      "return pm(s, R`${M} * ${bound(x)}^${N + 1} / ${N + 1}!`);"
+    ].join(`
+`)
+  },
+  {
+    name: "SIN",
+    label: "sin x (Taylor, Lagrange bound)",
+    code: [
+      "// sin x = sum (-1)^n x^(2n+1)/(2n+1)!; every derivative is at most 1, and the",
+      "// next nonzero power after x^(2N+1) is x^(2N+3)",
+      "const N = 8;",
+      "const s = sum(0, N, (n) => {",
+      "  const k = Number(n);",
+      "  return R`(-1)^${k} * ${pow(x, 2 * k + 1)} / ${2 * k + 1}!`;",
+      "});",
+      "return pm(s, R`${bound(x)}^${2 * N + 3} / ${2 * N + 3}!`);"
+    ].join(`
+`)
+  },
+  {
+    name: "COS",
+    label: "cos x (Taylor, Lagrange bound)",
+    code: [
+      "// cos x = sum (-1)^n x^(2n)/(2n)!; |derivatives| <= 1, next nonzero power x^(2N+2)",
+      "const N = 8;",
+      "const s = sum(0, N, (n) => {",
+      "  const k = Number(n);",
+      "  return R`(-1)^${k} * ${pow(x, 2 * k)} / ${2 * k}!`;",
+      "});",
+      "return pm(s, R`${bound(x)}^${2 * N + 2} / ${2 * N + 2}!`);"
+    ].join(`
+`)
+  },
+  {
+    name: "LN1P",
+    label: "ln(1 + x), |x| < 1",
+    code: [
+      "// ln(1+x) = sum (-1)^n x^(n+1)/(n+1); geometric tail bound, valid for |x| < 1",
+      "const r = bound(x);",
+      'if (!r.lessThan(R`1`)) throw new RangeError("LN1P needs |x| < 1");',
+      "const N = 30;",
+      "const s = sum(0, N, (n) => {",
+      "  const k = Number(n);",
+      "  return R`(-1)^${k} * ${pow(x, k + 1)} / ${k + 1}`;",
+      "});",
+      "return pm(s, R`${r}^${N + 2} / (${N + 2} * (1 - ${r}))`);"
+    ].join(`
+`)
+  },
+  {
+    name: "ATAN",
+    label: "arctan x, |x| ≤ 1",
+    code: [
+      "// arctan x = sum (-1)^n x^(2n+1)/(2n+1); alternating with decreasing terms for",
+      "// |x| <= 1, so the error is at most the first omitted term",
+      "const r = bound(x);",
+      'if (r.greaterThan(R`1`)) throw new RangeError("ATAN needs |x| <= 1");',
+      "const N = 30;",
+      "const s = sum(0, N, (n) => {",
+      "  const k = Number(n);",
+      "  return R`(-1)^${k} * ${pow(x, 2 * k + 1)} / ${2 * k + 1}`;",
+      "});",
+      "return pm(s, R`${r}^${2 * N + 3} / ${2 * N + 3}`);"
+    ].join(`
+`)
+  },
+  {
+    name: "GEOM",
+    label: "1/(1 − x), |x| < 1",
+    code: [
+      "// 1/(1-x) = sum x^n; the tail after x^N is at most |x|^(N+1)/(1-|x|)",
+      "const r = bound(x);",
+      'if (!r.lessThan(R`1`)) throw new RangeError("GEOM needs |x| < 1");',
+      "const N = 30;",
+      "return pm(sum(0, N, (n) => pow(x, n)), R`${r}^${N + 1} / (1 - ${r})`);"
+    ].join(`
+`)
+  },
+  {
+    name: "SQRT1P",
+    label: "√(1 + x), |x| < 1",
+    code: [
+      "// sqrt(1+x) = sum binom(1/2, n) x^n; |binom(1/2, k)| decreases, so the tail",
+      "// is at most |binom(1/2, N+1)| |x|^(N+1)/(1-|x|)",
+      "const r = bound(x);",
+      'if (!r.lessThan(R`1`)) throw new RangeError("SQRT1P needs |x| < 1");',
+      "const binom = (k) => product(0, k - 1, (j) => R`(1/2 - ${j}) / (${j} + 1)`);",
+      "const N = 30;",
+      "const s = sum(0, N, (n) => R`${binom(Number(n))} * ${pow(x, n)}`);",
+      "return pm(s, R`${bound(binom(N + 1))} * ${r}^${N + 1} / (1 - ${r})`);"
+    ].join(`
+`)
+  },
+  {
+    name: "NEWTON",
+    label: "Newton step toward √2",
+    code: [
+      "// one exact Newton step for x^2 = 2: try it deep in the tree",
+      "return R`(${x} + 2/${x}) / 2`;"
+    ].join(`
+`)
+  },
+  {
+    name: "SQ",
+    label: "x²",
+    code: [
+      "R`${x}^2`"
+    ].join(`
+`)
+  },
+  {
+    name: "RECIP",
+    label: "1/x",
+    code: [
+      "R`1/${x}`"
+    ].join(`
+`)
+  }
 ];
 
 // src/functions-panel.js
-var STORAGE_KEY = "ratree.functions.v1";
-var FIELDS = ["formula", "term", "terms", "error", "domain", "errorMode", "bound", "order"];
-function plainDefinition(definition) {
-  const { name, kind, note } = definition;
-  const result = { name, kind, note: note ?? "" };
-  for (const field of FIELDS)
-    if (definition[field] !== undefined)
-      result[field] = String(definition[field]);
-  return result;
-}
+var STORAGE_KEY = "ratree.functions.v2";
+var LEGACY_KEY = "ratree.functions.v1";
 function loadDefinitions(storage) {
-  try {
-    const parsed = JSON.parse(storage?.getItem(STORAGE_KEY) ?? "[]");
-    if (!Array.isArray(parsed))
-      return [];
-    const names = [];
-    return parsed.filter((item) => {
-      if (!item || item.kind !== "formula" && item.kind !== "taylor" || nameProblem(item.name, names))
-        return false;
-      names.push(item.name);
-      return true;
-    }).map(plainDefinition);
-  } catch {
-    return [];
-  }
+  const read = (key) => {
+    try {
+      const parsed = JSON.parse(storage?.getItem(key) ?? "null");
+      return Array.isArray(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+  const current = read(STORAGE_KEY);
+  const source = current ?? (read(LEGACY_KEY) ?? []).map((item) => item ? migrateDefinition(item) : null);
+  const names = [];
+  return source.filter((item) => {
+    if (!item || typeof item.code !== "string" || nameProblem(item.name, names))
+      return false;
+    names.push(item.name);
+    return true;
+  }).map(({ name, code }) => ({ name, code }));
 }
 function saveDefinitions(storage, definitions) {
   try {
-    storage?.setItem(STORAGE_KEY, JSON.stringify(definitions.map(plainDefinition)));
+    storage?.setItem(STORAGE_KEY, JSON.stringify(definitions.map(({ name, code }) => ({ name, code }))));
   } catch {}
+}
+function summary(code) {
+  const lines = String(code).split(`
+`).map((line) => line.trim()).filter(Boolean);
+  const comment = lines.find((line) => line.startsWith("//"));
+  return (comment ? comment.replace(/^\/\/\s*/, "") : lines[0] ?? "").slice(0, 80);
 }
 
 class FunctionsPanel {
-  constructor(root, { context, show = (element, value) => {
-    element.textContent = String(value);
-  }, onChange = () => {}, storage = globalThis.localStorage } = {}) {
+  constructor(root, { dialog, runner, context, show, onChange = () => {}, storage = globalThis.localStorage }) {
     this.root = root;
+    this.dialog = dialog;
+    this.runner = runner;
     this.context = context;
     this.show = show;
     this.onChange = onChange;
     this.storage = storage;
     this.definitions = loadDefinitions(storage);
+    this.statuses = new Map;
+    this.editing = null;
+    this.bindDialog();
     this.render();
-  }
-  map() {
-    return new Map(this.definitions.map((definition) => [definition.name, definition]));
   }
   names() {
     return this.definitions.map(({ name }) => name);
   }
-  add(kind, preset = null) {
-    const name = nextName(this.names(), preset?.name);
-    const definition = preset ? { ...plainDefinition(preset), name } : kind === "formula" ? { name, kind, formula: "x^2", note: "" } : { name, kind, term: "x^n/n!", terms: "10", error: "", domain: "", note: "" };
-    this.definitions.push(definition);
+  bindDialog() {
+    const { modal, test, save, cancel, close, stop, code } = this.dialog;
+    test.addEventListener("click", () => this.testEdit());
+    save.addEventListener("click", () => this.saveEdit());
+    cancel.addEventListener("click", () => this.closeEditor());
+    close?.addEventListener("click", () => this.closeEditor());
+    stop.addEventListener("click", () => this.runner.stop());
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal)
+        this.closeEditor();
+    });
+    code.addEventListener("keydown", (event) => {
+      if (event.key === "Tab") {
+        event.preventDefault();
+        const { selectionStart: start, selectionEnd: end, value } = code;
+        code.value = `${value.slice(0, start)}  ${value.slice(end)}`;
+        code.selectionStart = code.selectionEnd = start + 2;
+      } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        this.testEdit();
+      } else if (event.key === "Escape") {
+        this.closeEditor();
+      }
+    });
+  }
+  openEditor({ name = null, code = "", preferredName = null } = {}) {
+    this.editing = name;
+    const { modal, title } = this.dialog;
+    this.dialog.name.value = name ?? nextName(this.names(), preferredName ?? undefined);
+    this.dialog.code.value = code;
+    title.textContent = name ? `Edit ${name}` : "New function";
+    this.setMessage("Ctrl/Cmd+Enter tests the code at the current node.", "info");
+    modal.style.display = "block";
+    this.dialog.code.focus();
+  }
+  closeEditor() {
+    this.runner.stop();
+    this.dialog.modal.style.display = "none";
+    this.editing = null;
+  }
+  setMessage(text, kind) {
+    const { message } = this.dialog;
+    message.textContent = text;
+    message.className = `fn-message fn-message-${kind}`;
+  }
+  editedName() {
+    return this.dialog.name.value.trim().toUpperCase();
+  }
+  checkName() {
+    const name = this.editedName();
+    const others = this.names().filter((other) => other !== this.editing);
+    return nameProblem(name, others);
+  }
+  async testEdit() {
+    try {
+      await this.runTest();
+    } catch (error) {
+      this.dialog.stop.hidden = true;
+      this.setMessage(error?.message ?? String(error), "error");
+    }
+  }
+  async runTest() {
+    const problem = this.checkName();
+    if (problem)
+      return this.setMessage(problem, "error");
+    this.setMessage("Computing…", "busy");
+    this.dialog.stop.hidden = false;
+    const { x, d } = this.context();
+    const result = await this.runner.request({
+      type: "test",
+      definitions: this.definitions,
+      name: this.editedName(),
+      originalName: this.editing,
+      code: this.dialog.code.value,
+      x,
+      d
+    });
+    this.dialog.stop.hidden = true;
+    if (result.superseded)
+      return;
+    if (!result.ok)
+      return this.setMessage(result.error, "error");
+    this.setMessage("", "ok");
+    const label = this.dialog.message.ownerDocument.createElement("span");
+    label.textContent = `${this.editedName()}(${x}) at depth ${d} = `;
+    const value = this.dialog.message.ownerDocument.createElement("span");
+    this.dialog.message.replaceChildren(label, value);
+    this.show(value, result.value);
+  }
+  saveEdit() {
+    const problem = this.checkName();
+    if (problem)
+      return this.setMessage(problem, "error");
+    if (!this.dialog.code.value.trim())
+      return this.setMessage("The code is empty", "error");
+    const definition = { name: this.editedName(), code: this.dialog.code.value };
+    const index = this.definitions.findIndex(({ name }) => name === this.editing);
+    if (index >= 0)
+      this.definitions[index] = definition;
+    else
+      this.definitions.push(definition);
+    this.closeEditor();
     this.changed();
-    return definition;
   }
   remove(name) {
     this.definitions = this.definitions.filter((definition) => definition.name !== name);
     this.changed();
   }
-  rename(oldName, newName) {
-    const name = newName.trim().toUpperCase();
-    if (name === oldName)
-      return null;
-    const problem = nameProblem(name, this.names().filter((other) => other !== oldName));
-    if (problem)
-      return problem;
-    this.definitions.find((definition) => definition.name === oldName).name = name;
-    this.changed();
-    return null;
-  }
-  update(name, field, value) {
-    const definition = this.definitions.find((item) => item.name === name);
-    definition[field] = value;
-    if (field === "kind") {
-      if (value === "formula" && definition.formula === undefined)
-        definition.formula = "x";
-      if (value === "taylor" && definition.term === undefined)
-        Object.assign(definition, { term: "x^n/n!", terms: "10", error: "", domain: "" });
-    }
-    if (field === "errorMode" && value === "lagrange" && definition.bound === undefined)
-      Object.assign(definition, { bound: "1", order: "n+1" });
-    this.changed(field === "kind" || field === "errorMode");
-  }
-  changed(rerender = true) {
+  changed() {
     saveDefinitions(this.storage, this.definitions);
-    if (rerender)
-      this.render();
-    else
-      this.refresh();
+    this.render();
     this.onChange();
-  }
-  status(definition) {
-    try {
-      const context = { ...this.context(), functions: this.map() };
-      const prefix = definition.kind === "taylor" ? `N = ${termCount(definition, context)} at depth ${context.vars.d} · ` : "";
-      const value = applyFunction(definition, context.vars.x, { ...context, name: definition.name });
-      return { ok: true, prefix: `${prefix}${definition.name}(x) = `, value };
-    } catch (error) {
-      return { ok: false, text: error.message };
-    }
-  }
-  refresh() {
-    for (const card of this.root.querySelectorAll(".fn-card")) {
-      const definition = this.definitions.find((item) => item.name === card.dataset.name);
-      const line = card.querySelector(".fn-status");
-      if (!definition || !line)
-        continue;
-      const status = this.status(definition);
-      line.classList.toggle("fn-error", !status.ok);
-      if (!status.ok) {
-        line.textContent = status.text;
-        continue;
-      }
-      const valueSpan = this.element("span", "fn-value");
-      line.replaceChildren(status.prefix, valueSpan);
-      this.show(valueSpan, status.value);
-    }
   }
   element(tag, className, text) {
     const node = this.root.ownerDocument.createElement(tag);
@@ -6217,117 +6597,195 @@ class FunctionsPanel {
       node.textContent = text;
     return node;
   }
-  field(definition, field, label, placeholder) {
-    const row = this.element("label", "fn-field");
-    row.append(this.element("span", "fn-label", label));
-    const input = this.element("input", `fn-input fn-${field}`);
-    input.type = "text";
-    input.value = definition[field] ?? "";
-    input.placeholder = placeholder;
-    input.spellcheck = false;
-    input.addEventListener("input", () => this.update(definition.name, field, input.value));
-    row.append(input);
-    return row;
-  }
-  card(definition) {
-    const card = this.element("div", "fn-card");
-    card.dataset.name = definition.name;
-    const head = this.element("div", "fn-head");
-    const name = this.element("input", "fn-name");
-    name.value = definition.name;
-    name.title = "Function name: capital letters and digits";
-    name.addEventListener("change", () => {
-      const problem = this.rename(definition.name, name.value);
-      if (problem) {
-        name.value = definition.name;
-        card.querySelector(".fn-status").textContent = problem;
-        card.querySelector(".fn-status").classList.add("fn-error");
-      }
-    });
-    head.append(name);
-    const kinds = this.element("div", "fn-kinds");
-    for (const [kind, label] of [["formula", "Formula"], ["taylor", "Taylor"]]) {
-      const button = this.element("button", `fn-kind${definition.kind === kind ? " active" : ""}`, label);
-      button.type = "button";
-      button.addEventListener("click", () => {
-        if (definition.kind !== kind)
-          this.update(definition.name, "kind", kind);
-      });
-      kinds.append(button);
-    }
-    head.append(kinds);
-    const remove = this.element("button", "fn-remove", "×");
-    remove.type = "button";
-    remove.title = `Remove ${definition.name}`;
-    remove.addEventListener("click", () => this.remove(definition.name));
-    head.append(remove);
-    card.append(head);
-    if (definition.kind === "formula") {
-      card.append(this.field(definition, "formula", `${definition.name}(x) =`, "x^2 - 2"));
-    } else {
-      card.append(this.field(definition, "term", "term(x, n) =", "x^n/n!"));
-      card.append(this.field(definition, "terms", "N =", "10 or 5*d"));
-      const modes = this.element("div", "fn-kinds fn-modes");
-      for (const [mode, label] of [["explicit", "Error formula"], ["lagrange", "Lagrange"]]) {
-        const active = (definition.errorMode ?? "explicit") === mode;
-        const button = this.element("button", `fn-kind${active ? " active" : ""}`, label);
-        button.type = "button";
-        button.title = mode === "lagrange" ? "Remainder ≤ M·|x|^k/k! with M bounding |f^(k)| between 0 and x" : "Write the remainder bound directly";
-        button.addEventListener("click", () => {
-          if (!active)
-            this.update(definition.name, "errorMode", mode);
-        });
-        modes.append(button);
-      }
-      card.append(modes);
-      if (definition.errorMode === "lagrange") {
-        card.append(this.field(definition, "bound", "|f^(k)| ≤ M(x, n) =", "e.g. 1 or 3^CEIL(ABS(x))"));
-        card.append(this.field(definition, "order", "k =", "n+1"));
+  setStatuses(statuses) {
+    this.statuses = new Map((statuses ?? []).map((status) => [status.name, status]));
+    for (const row of this.root.querySelectorAll(".fn-row")) {
+      const line = row.querySelector(".fn-status");
+      const status = this.statuses.get(row.dataset.name);
+      line.classList.toggle("fn-error", Boolean(status && !status.ok));
+      if (!status) {
+        line.textContent = "…";
+      } else if (!status.ok) {
+        line.textContent = status.error;
       } else {
-        card.append(this.field(definition, "error", "error(x, n=N) =", "bound on the remainder (blank: none)"));
+        const value = this.element("span", "fn-value");
+        line.replaceChildren(`${row.dataset.name}(x) = `, value);
+        this.show(value, status.value);
       }
-      card.append(this.field(definition, "domain", "domain", "all x, or an interval like -1:1"));
     }
-    if (definition.note)
-      card.append(this.element("div", "fn-note", definition.note));
-    card.append(this.element("div", "fn-status"));
-    return card;
   }
   render() {
     this.root.replaceChildren();
     const tools = this.element("div", "fn-tools");
-    for (const [kind, label] of [["formula", "+ Formula"], ["taylor", "+ Taylor"]]) {
-      const button = this.element("button", "fn-add", label);
-      button.type = "button";
-      button.addEventListener("click", () => this.add(kind));
-      tools.append(button);
-    }
+    const add = this.element("button", "fn-add", "+ Add function");
+    add.type = "button";
+    add.addEventListener("click", () => this.openEditor({ code: "// x is the node's value, d its depth\nreturn R`${x}^2 - 2`;" }));
+    tools.append(add);
     const presets = this.element("select", "fn-presets");
-    presets.title = "Add a predefined function";
+    presets.title = "Start from a predefined function";
     presets.append(Object.assign(this.element("option", "", "Predefined…"), { value: "" }));
-    for (const preset of PRESETS)
-      presets.append(Object.assign(this.element("option", "", `${preset.label} (${preset.note})`), { value: preset.name }));
+    for (const snippet of SNIPPETS)
+      presets.append(Object.assign(this.element("option", "", snippet.label), { value: snippet.name }));
     presets.addEventListener("change", () => {
-      const preset = PRESETS.find(({ name }) => name === presets.value);
+      const snippet = SNIPPETS.find(({ name }) => name === presets.value);
       presets.value = "";
-      if (preset)
-        this.add(preset.kind, preset);
+      if (snippet)
+        this.openEditor({ code: snippet.code, preferredName: snippet.name });
     });
     tools.append(presets);
     this.root.append(tools);
     if (this.definitions.length === 0) {
-      this.root.append(this.element("p", "fn-empty", "No functions yet. In the expression box, F means F(x) at the current node and F(expr) applies F to expr."));
+      this.root.append(this.element("p", "fn-empty", "No functions yet. Each is a little JavaScript with x (the node) and d (its depth). In the expression box, F means F(x) and F(expr) applies F to expr."));
     }
-    for (const definition of this.definitions)
-      this.root.append(this.card(definition));
-    this.refresh();
+    for (const definition of this.definitions) {
+      const row = this.element("div", "fn-row");
+      row.dataset.name = definition.name;
+      const head = this.element("div", "fn-head");
+      head.append(this.element("strong", "fn-title", definition.name));
+      head.append(this.element("span", "fn-summary", summary(definition.code)));
+      const edit = this.element("button", "fn-edit", "Edit");
+      edit.type = "button";
+      edit.addEventListener("click", () => this.openEditor({ name: definition.name, code: definition.code }));
+      const remove = this.element("button", "fn-remove", "×");
+      remove.type = "button";
+      remove.title = `Remove ${definition.name}`;
+      remove.addEventListener("click", () => this.remove(definition.name));
+      head.append(edit, remove);
+      row.append(head, this.element("div", "fn-status", "…"));
+      this.root.append(row);
+    }
+    this.setStatuses([...this.statuses.values()]);
+  }
+}
+
+// src/ratree-runtime.js
+var revive = (value) => JSON.parse(JSON.stringify(value), reviveCoreValue);
+var encode = (value) => JSON.parse(JSON.stringify(value));
+var failure = (error) => ({ ok: false, error: describeError(error), line: error?.functionLine ?? null, name: error?.functionName ?? null });
+function handleRequest(message) {
+  const x = revive(message.x);
+  const depth = Number(message.d ?? 0);
+  try {
+    if (message.type === "statuses" || message.type === "all") {
+      const functions = buildFunctions(message.definitions, depth);
+      const statuses = message.definitions.map(({ name }) => {
+        try {
+          return { name, ok: true, value: encode(functions.call(name, x)) };
+        } catch (error) {
+          return { name, ...failure(error) };
+        }
+      });
+      if (message.type === "statuses")
+        return { ok: true, statuses };
+      let expression = null;
+      if (String(message.expression ?? "").trim()) {
+        try {
+          expression = { ok: true, value: encode(functions.evaluate(message.expression, x)) };
+        } catch (error) {
+          expression = failure(error);
+        }
+      }
+      return { ok: true, statuses, expression };
+    }
+    if (message.type === "expression") {
+      const functions = buildFunctions(message.definitions, depth);
+      return { ok: true, value: encode(functions.evaluate(message.expression, x)) };
+    }
+    if (message.type === "test") {
+      const others = message.definitions.filter(({ name }) => name !== message.name && name !== message.originalName);
+      const functions = buildFunctions([...others, { name: message.name, code: message.code }], depth);
+      return { ok: true, value: encode(functions.call(message.name, x)) };
+    }
+    return { ok: false, error: `unknown request ${message.type}` };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+// src/ratree-client.js
+class FunctionRunner {
+  constructor({ workerUrl = "ratree-worker.js", timeoutMs = 3000, onBusy = () => {}, inProcess = typeof window === "undefined" || typeof Worker === "undefined" } = {}) {
+    this.inProcess = inProcess;
+    this.workerUrl = workerUrl;
+    this.timeoutMs = timeoutMs;
+    this.onBusy = onBusy;
+    this.pending = null;
+    this.nextId = 1;
+    this.worker = null;
+  }
+  start() {
+    if (this.inProcess)
+      return null;
+    this.worker = new Worker(this.workerUrl, { type: "module" });
+    this.worker.addEventListener("message", (event) => this.receive(event.data));
+    this.worker.addEventListener("error", (event) => {
+      this.finish({ ok: false, error: `worker error: ${event.message ?? "failed to load"}` });
+      this.restart();
+    });
+    return this.worker;
+  }
+  restart() {
+    this.worker?.terminate();
+    this.worker = null;
+  }
+  request(message) {
+    if (this.inProcess)
+      return Promise.resolve(this.revive(handleRequest(JSON.parse(JSON.stringify(message)))));
+    if (this.pending) {
+      this.finish({ ok: false, superseded: true, error: "superseded" });
+      this.restart();
+    }
+    if (!this.worker)
+      this.start();
+    const id = this.nextId++;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.finish({ ok: false, timedOut: true, error: `Stopped: took longer than ${this.timeoutMs / 1000} s` });
+        this.restart();
+      }, this.timeoutMs);
+      this.pending = { id, resolve, timer };
+      this.onBusy(true);
+      this.worker.postMessage({ id, ...JSON.parse(JSON.stringify(message)) });
+    });
+  }
+  stop() {
+    if (!this.pending)
+      return;
+    this.finish({ ok: false, stopped: true, error: "Stopped" });
+    this.restart();
+  }
+  receive(data) {
+    if (!this.pending || data?.id !== this.pending.id)
+      return;
+    this.finish(this.revive(data));
+  }
+  finish(result) {
+    if (!this.pending)
+      return;
+    const { resolve, timer } = this.pending;
+    clearTimeout(timer);
+    this.pending = null;
+    this.onBusy(false);
+    resolve(result);
+  }
+  revive(result) {
+    if (result.value !== undefined)
+      result.value = revive(result.value);
+    if (result.statuses) {
+      for (const status of result.statuses)
+        if (status.value !== undefined)
+          status.value = revive(status.value);
+    }
+    if (result.expression?.value !== undefined)
+      result.expression.value = revive(result.expression.value);
+    return result;
   }
 }
 
 // src/compact-display.js
 var LONG_TEXT = 40;
 var PERIOD_SEARCH_DENOMINATOR = 100000n;
-var asRational4 = (value) => value instanceof Integer ? value.toRational() : value;
+var asRational5 = (value) => value instanceof Integer ? value.toRational() : value;
 function terminates(denominator) {
   let rest = denominator;
   while (rest % 2n === 0n)
@@ -6337,7 +6795,7 @@ function terminates(denominator) {
   return rest === 1n;
 }
 function boundedDecimal(value, digits = 30) {
-  const rational = asRational4(value);
+  const rational = asRational5(value);
   if (rational.denominator === 1n)
     return rational.numerator.toString();
   if (rational.denominator <= PERIOD_SEARCH_DENOMINATOR) {
@@ -6348,7 +6806,7 @@ function boundedDecimal(value, digits = 30) {
   return terminates(rational.denominator) && text.split(".")[1]?.length < digits ? text : `${text}…`;
 }
 function directedScientific(value, significant, direction) {
-  const rational = asRational4(value);
+  const rational = asRational5(value);
   if (rational.numerator === 0n)
     return "0";
   const ten = new Rational(10);
@@ -6376,7 +6834,7 @@ function compact(value, format, significant = 15) {
       shortened: true
     };
   }
-  const rational = asRational4(value);
+  const rational = asRational5(value);
   if (rational instanceof Rational)
     return { text: formatScientific(rational, significant), shortened: true };
   return { text: `${full.slice(0, LONG_TEXT)}…`, shortened: true };
@@ -6391,7 +6849,7 @@ function allFormats(value) {
       ["Enclosing scientific", `[${directedScientific(value.low, 20, "down")}, ${directedScientific(value.high, 20, "up")}]`]
     ];
   }
-  const rational = asRational4(value);
+  const rational = asRational5(value);
   return [
     ["Fraction", rational.toString()],
     ["Mixed", rational.toMixedString()],
@@ -6427,15 +6885,34 @@ class SternBrocotTreeVisualizer {
     this.treeContainer = null;
     this.initializeElements();
     const panelRoot = document.getElementById("functionsPanel");
+    this.runner = new FunctionRunner({ onBusy: (busy) => this.setBusy(busy) });
     if (panelRoot) {
       if (window.innerWidth <= 768)
         document.getElementById("functionsDetails")?.removeAttribute("open");
+      const byId = (id) => document.getElementById(id);
       this.functionsPanel = new FunctionsPanel(panelRoot, {
-        context: () => this.functionContext(),
+        dialog: {
+          modal: byId("functionModal"),
+          title: byId("functionTitle"),
+          name: byId("functionName"),
+          code: byId("functionCode"),
+          message: byId("functionMessage"),
+          test: byId("functionTest"),
+          save: byId("functionSave"),
+          cancel: byId("functionCancel"),
+          close: byId("closeFunction"),
+          stop: byId("functionStop")
+        },
+        runner: this.runner,
+        context: () => {
+          const { vars } = this.functionContext();
+          return { x: vars.x, d: Number(vars.d.value) };
+        },
         show: (element, value) => this.showValue(element, value),
         onChange: () => this.updateExpressionResult()
       });
     }
+    document.getElementById("computeStop")?.addEventListener("click", () => this.runner.stop());
     this.setupEventListeners();
     this.setupTooltips();
     this.loadFromURL();
@@ -6470,6 +6947,7 @@ class SternBrocotTreeVisualizer {
       valueModal: document.getElementById("valueModal"),
       valueContent: document.getElementById("valueContent"),
       closeValue: document.getElementById("closeValue"),
+      functionModalOpen: () => document.getElementById("functionModal")?.style.display === "block",
       helpContent: document.getElementById("helpContent"),
       closeHelp: document.getElementById("closeHelp"),
       fractionTooltip: document.getElementById("fractionTooltip"),
@@ -6551,6 +7029,8 @@ class SternBrocotTreeVisualizer {
         this.closeModal("farey");
         this.closeModal("help");
         this.closeModal("value");
+        if (this.elements.functionModalOpen?.())
+          this.functionsPanel.closeEditor();
       }
     });
     window.addEventListener("popstate", (e) => {
@@ -7696,8 +8176,7 @@ class SternBrocotTreeVisualizer {
   functionContext() {
     const depth = this.currentFraction.sternBrocotDepth();
     return {
-      vars: { x: this.currentFraction.toRational(), d: new Integer(Number.isFinite(depth) ? depth : 0) },
-      functions: this.functionsPanel ? this.functionsPanel.map() : null
+      vars: { x: this.currentFraction.toRational(), d: new Integer(Number.isFinite(depth) ? depth : 0) }
     };
   }
   formatFunctionValue(value) {
@@ -7754,24 +8233,51 @@ class SternBrocotTreeVisualizer {
     }
     this.elements.valueModal.style.display = "block";
   }
-  updateExpressionResult() {
-    this.functionsPanel?.refresh();
+  setBusy(busy) {
+    const status = document.getElementById("computeStatus");
+    if (!status)
+      return;
+    clearTimeout(this.busyTimer);
+    if (busy)
+      this.busyTimer = setTimeout(() => {
+        status.hidden = false;
+      }, 150);
+    else
+      status.hidden = true;
+  }
+  async updateExpressionResult() {
+    const element = this.elements.expressionResult;
     const expression = this.elements.expressionInput.value.trim();
-    if (!expression) {
-      this.elements.expressionResult.onclick = null;
-      this.elements.expressionResult.classList.remove("value-link");
-      this.elements.expressionResult.textContent = "Enter an expression above";
+    const definitions = this.functionsPanel ? this.functionsPanel.definitions : [];
+    const generation = this.evaluationGeneration = (this.evaluationGeneration ?? 0) + 1;
+    if (!expression && definitions.length === 0) {
+      element.onclick = null;
+      element.classList.remove("value-link");
+      element.textContent = "Enter an expression above";
       return;
     }
-    try {
-      const { vars, functions } = this.functionContext();
-      const result = evaluateAt(expression, vars.x, { depth: Number(vars.d.value), functions });
-      this.showValue(this.elements.expressionResult, result);
-    } catch (error) {
-      this.elements.expressionResult.onclick = null;
-      this.elements.expressionResult.classList.remove("value-link");
-      this.elements.expressionResult.textContent = `Error: ${error.message}`;
+    const { vars } = this.functionContext();
+    const result = await this.runner.request({ type: "all", definitions, expression, x: vars.x, d: Number(vars.d.value) });
+    if (result.superseded || generation !== this.evaluationGeneration)
+      return;
+    if (!result.ok) {
+      this.functionsPanel?.setStatuses(definitions.map(({ name }) => ({ name, ok: false, error: result.error })));
+      this.showExpressionError(expression ? result.error : "Enter an expression above");
+      return;
     }
+    this.functionsPanel?.setStatuses(result.statuses);
+    if (!expression)
+      return this.showExpressionError("Enter an expression above");
+    if (result.expression.ok)
+      this.showValue(element, result.expression.value);
+    else
+      this.showExpressionError(`Error: ${result.expression.error}`);
+  }
+  showExpressionError(text) {
+    const element = this.elements.expressionResult;
+    element.onclick = null;
+    element.classList.remove("value-link");
+    element.textContent = text;
   }
   updateBoundaryDisplay() {
     const parents = this.currentFraction.fareyParents();
@@ -7796,14 +8302,14 @@ class SternBrocotTreeVisualizer {
   showHelpModal() {
     this.elements.helpContent.innerHTML = `
       <h3>Expressions and Named Functions</h3>
-      <p>The expression box evaluates exactly at the current node: <code>x</code> is the node's value and <code>d</code> its depth. Literals use RiX spelling (<code>3/4</code>, <code>0.#3</code>, <code>2.5_^-2</code>, <code>1:2</code>); operators are <code>+ - * / ^ ! :</code>.</p>
+      <p>The expression box evaluates exactly at the current node: <code>x</code> is the node's value and <code>d</code> its depth. Literals use RiX spelling (<code>3/4</code>, <code>0.#3</code>, <code>2.5_^-2</code>, <code>1:2</code>); operators are <code>+ - * / ^ ! :</code>. <code>F</code> alone means <code>F(x)</code>; <code>F(expr)</code> evaluates <code>expr</code> and applies <code>F</code>; calls nest: <code>F(G(x) + 1)</code>.</p>
       <ul>
-        <li>The <strong>Functions</strong> panel (below Help) defines capitalised functions. <code>F</code> alone means <code>F(x)</code>; <code>F(expr)</code> evaluates <code>expr</code> and applies <code>F</code>; calls nest: <code>F(G(x) + 1)</code>.</li>
-        <li><strong>Formula</strong>: a rational expression in <code>x</code>, e.g. <code>x^2 - 2</code>.</li>
-        <li><strong>Taylor</strong>: <code>term(x, n)</code> is summed for <code>n = 0..N</code>; <code>N</code> is a number or a formula in <code>d</code> (<code>5*d</code> gives N = 15 at depth 3). The remainder bound comes from either an <strong>Error formula</strong> <code>error(x, n)</code> evaluated at <code>n = N</code>, or <strong>Lagrange</strong> mode (Taylor's theorem): <code>M · |x|^k / k!</code>, where <code>M(x, n)</code> bounds the k-th derivative between 0 and x and <code>k</code> (default <code>n+1</code>; <code>2*n+3</code> for sin's odd series) is the order after the last power used. The result is the exact sum ± that bound, an interval. A domain such as <code>-1:1</code> says where the bound holds; x outside it is an error.</li>
-        <li>Intervals propagate exactly through interval arithmetic: <code>EXP(0:1)</code> encloses e<sup>x</sup> on [0, 1] (alternating series give wide but valid enclosures).</li>
-        <li><strong>Predefined</strong> adds editable definitions with checked remainder bounds: e<sup>x</sup>, sin, cos (all x), ln(1+x), 1/(1−x), √(1+x) (|x| &lt; 1), arctan (|x| ≤ 1), and the formulas x², 1/x.</li>
-        <li>Built-ins for bounds: <code>ABS</code>, <code>FLOOR</code>, <code>CEIL</code>, <code>MIN</code>, <code>MAX</code>, <code>BINOM(a, k)</code>.</li>
+        <li><strong>Functions</strong> (panel below Help): <em>+ Add function</em> opens an editor with a capitalised name and JavaScript code — a function body, or one expression that is returned automatically. <em>Test at this node</em> shows the value; errors show the line.</li>
+        <li>In scope: <code>x</code> (the argument), <code>d</code> (depth), all of RatMath Core (<code>R</code>, <code>Rational</code>, <code>Integer</code>, <code>RationalInterval</code>, <code>sum</code>, <code>product</code>, <code>seq</code>, <code>range</code>, <code>exact</code>, …), helpers <code>pow</code> (x<sup>0</sup> = 1), <code>factorial</code>, <code>abs</code>, <code>bound</code> (max |v|), <code>ceil</code>, <code>floor</code>, <code>pm(center, radius)</code>, <code>expr("…")</code> for expression-box syntax, and your other functions by name (<code>G(x)</code>, or <code>G()</code> for G at x).</li>
+        <li>Return an exact value or an interval (a whole JavaScript number or bigint is fine; 0.1 is refused as inexact).</li>
+        <li><strong>Predefined…</strong> opens editable snippets: e<sup>x</sup>, sin, cos with Taylor's Lagrange remainder (|R| ≤ M·|x|<sup>k</sup>/k!), ln(1+x), 1/(1−x), √(1+x) with geometric tails, arctan with the alternating-series bound, a Newton step, x², 1/x. Each states its domain and refuses x outside it.</li>
+        <li>Intervals propagate: <code>EXP(0:1)</code> encloses e<sup>x</sup> on [0, 1] (alternating series give wide but valid enclosures).</li>
+        <li>Code runs in a separate worker with no network access; anything taking over 3 seconds is stopped, and <em>Stop</em> ends it sooner. Functions are saved in this browser.</li>
       </ul>
 
       <h3>What is the Stern-Brocot Tree?</h3>

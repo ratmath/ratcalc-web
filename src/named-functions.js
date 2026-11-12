@@ -233,6 +233,7 @@ function checkDomain(definition, x, context) {
 export function applyFunction(definition, argument, context) {
   const vars = { ...context.vars, x: argument };
   const inner = { ...context, vars, depth: (context.depth ?? 0) + 1 };
+  if (definition.kind === "js") return definition.apply(argument, inner);
   if (definition.kind === "formula") return evaluateExpression(definition.formula, inner);
   if (definition.kind !== "taylor") throw new TypeError(`unknown function kind '${definition.kind}'`);
   checkDomain(definition, argument, context);

@@ -175,18 +175,20 @@ describe("names and persistence", () => {
     expect(nameProblem("F", ["F"])).toContain("already defined");
   });
 
-  test("definitions round-trip through storage and bad data is ignored", () => {
+  test("definitions round-trip through storage, migrate from version 1, and ignore bad data", () => {
     const store = new Map();
     const storage = { getItem: (key) => store.get(key) ?? null, setItem: (key, value) => store.set(key, value) };
-    saveDefinitions(storage, [{ ...presets.EXP }, { name: "F", kind: "formula", formula: "x^2" }]);
-    const loaded = loadDefinitions(storage);
-    expect(loaded.map(({ name }) => name)).toEqual(["EXP", "F"]);
-    expect(loaded[0].error).toBe(presets.EXP.error);
-    store.set("ratree.functions.v1", JSON.stringify([{ name: "G", kind: "formula", formula: "x" }, { name: "G", kind: "formula" }, { name: "bad", kind: "formula" }, { name: "H", kind: "other" }, null]));
+    store.set("ratree.functions.v1", JSON.stringify([{ ...presets.EXP }, { name: "F", kind: "formula", formula: "x^2" }]));
+    const migrated = loadDefinitions(storage);
+    expect(migrated.map(({ name }) => name)).toEqual(["EXP", "F"]);
+    expect(migrated[1].code).toContain('expr("x^2")');
+    expect(migrated[0].code).toContain("taylor({");
+    saveDefinitions(storage, [{ name: "G", code: "R`1/2`" }]);
+    expect(loadDefinitions(storage)).toEqual([{ name: "G", code: "R`1/2`" }]);
+    store.set("ratree.functions.v2", JSON.stringify([{ name: "G", code: "1" }, { name: "G", code: "2" }, { name: "bad", code: "1" }, { name: "H" }, null]));
     expect(loadDefinitions(storage).map(({ name }) => name)).toEqual(["G"]);
-    store.set("ratree.functions.v1", "{not json");
-    expect(loadDefinitions(storage)).toEqual([]);
-    store.set("ratree.functions.v1", "{}");
+    store.set("ratree.functions.v2", "{not json");
+    store.delete("ratree.functions.v1");
     expect(loadDefinitions(storage)).toEqual([]);
     expect(loadDefinitions(undefined)).toEqual([]);
     expect(() => saveDefinitions({ setItem() { throw new Error("blocked"); } }, [])).not.toThrow();

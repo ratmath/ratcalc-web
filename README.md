@@ -64,22 +64,21 @@ fraction" and the "Expression (using x)" box read exact `R` expressions
 Scientific display uses the RiX spelling (`2.33333_^0…`).
 
 **Named functions.** The Functions panel (below Help; collapsed on phones)
-defines capitalised functions for the expression box (`src/named-functions.js`,
-UI in `src/functions-panel.js`, saved in `localStorage`):
-
-- `F` means `F(x)` at the current node; `F(expr)` evaluates `expr` first;
-  calls nest (`F(G(x) + 1)`). Variables: `x` (node), `d` (depth).
-- **Formula**: a rational expression in `x`.
-- **Taylor**: `term(x, n)` summed for `n = 0..N`; `N` is a number or a formula
-  in `d` (`5*d` → 15 at depth 3); the remainder bound is either an error
-  formula `error(x, n)` at `n = N`, or Lagrange mode `M · |x|^k / k!` with a
-  derivative bound `M(x, n)` and order `k` (default `n+1`), giving the exact
-  sum ± bound as an interval; an optional domain
-  (`-1:1`) is enforced. Series use x⁰ = 1, including at x = 0.
-- **Predefined**: eˣ, sin, cos (all x), ln(1+x), 1/(1−x), √(1+x) (|x| < 1),
-  arctan (|x| ≤ 1), x², 1/x — editable after insertion.
-- Built-ins for bounds: `ABS`, `FLOOR`, `CEIL`, `MIN`, `MAX`, `BINOM(a, k)`.
-  Interval arguments propagate by interval arithmetic (valid, sometimes wide).
+lists named functions written in JavaScript. "+ Add function" (or Edit, or a
+Predefined… snippet) opens an editor: a capitalised name and code that is a
+function body or a single expression. In scope: `x` (argument), `d` (depth),
+every Core export, helpers `pow` (x⁰ = 1), `factorial`, `abs`, `bound`,
+`ceil`, `floor`, `pm(center, radius)`, `expr("…")`, and the other functions by
+name; `lib` collects them, so later libraries (such as the planned analytic
+package) can be added without changing saved code. Code runs in a Web Worker
+(`src/ratree-worker.js`, network globals removed) with a 3-second limit and a
+Stop button. In the expression box `F` means `F(x)` and `F(expr)` applies `F`.
+Predefined snippets give eˣ, sin, cos (Lagrange remainder), ln(1+x),
+1/(1−x), √(1+x) (geometric tails), arctan (alternating bound), a Newton step,
+x² and 1/x. Older Formula/Taylor functions are migrated to equivalent code
+(`expr(…)` / `taylor({…})`). Modules: `ratree-scope.js` (scope, compile,
+snippets), `ratree-runtime.js` (requests), `ratree-client.js` (worker,
+timeouts), `functions-panel.js` (list and editor).
 
 **Long values.** Results longer than 40 characters are shortened: scalars to
 scientific form (… marks rounding), intervals with the low end rounded down

@@ -5,12 +5,13 @@
     "type": "module",
     "scripts": {
         "build-web": "bun build src/web-calc.js --outfile docs/calc.js --format esm --target browser",
-        "build-stern-brocot": "bun build src/stern-brocot-web.js --outfile docs/stern-brocot.js --format esm --target browser",
+        "build-stern-brocot": "bun build src/stern-brocot-web.js --outfile docs/stern-brocot.js --format esm --target browser && bun run build-ratree-worker",
         "build-showcase": "bun build src/showcase.js --outfile docs/showcase.js --format esm --target browser",
         "build-library": "bun build index.js --outfile docs/ratmath.js --format esm --target browser",
         "build-all": "bun run build-web && bun run build-stern-brocot && bun run build-showcase && bun run build-library",
         "serve": "python3 -m http.server 3000 --directory docs",
-        "test": "bun test tests"
+        "test": "bun test tests",
+        "build-ratree-worker": "bun build src/ratree-worker.js --outfile docs/ratree-worker.js --format esm --target browser"
     },
     "dependencies": {
         "@ratmath/core": "workspace:*",
